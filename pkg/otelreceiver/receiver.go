@@ -1,0 +1,283 @@
+package otelreceiver
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"time"
+
+	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
+	"google.golang.org/grpc"
+
+	"github.com/lethaltrifecta/replay/pkg/storage"
+	"github.com/lethaltrifecta/replay/pkg/utils/logger"
+)
+
+// Receiver handles OTLP trace ingestion
+type Receiver struct {
+	ptraceotlp.UnimplementedGRPCServer
+	storage    storage.Storage
+	logger     *logger.Logger
+	grpcServer *grpc.Server
+	httpServer *http.Server
+	parser     *Parser
+}
+
+// Config holds receiver configuration
+type Config struct {
+	GRPCEndpoint string
+	HTTPEndpoint string
+}
+
+// NewReceiver creates a new OTLP receiver
+func NewReceiver(cfg Config, storage storage.Storage, log *logger.Logger) (*Receiver, error) {
+	if storage == nil {
+		return nil, fmt.Errorf("storage cannot be nil")
+	}
+	if log == nil {
+		return nil, fmt.Errorf("logger cannot be nil")
+	}
+
+	parser := NewParser(log)
+
+	return &Receiver{
+		storage: storage,
+		logger:  log,
+		parser:  parser,
+	}, nil
+}
+
+// Start starts both gRPC and HTTP receivers
+func (r *Receiver) Start(ctx context.Context, cfg Config) error {
+	errChan := make(chan error, 2)
+
+	// Start gRPC server
+	go func() {
+		if err := r.startGRPC(cfg.GRPCEndpoint); err != nil {
+			errChan <- fmt.Errorf("gRPC server error: %w", err)
+		}
+	}()
+
+	// Start HTTP server
+	go func() {
+		if err := r.startHTTP(cfg.HTTPEndpoint); err != nil && err != http.ErrServerClosed {
+			errChan <- fmt.Errorf("HTTP server error: %w", err)
+		}
+	}()
+
+	r.logger.Info("OTLP receiver started",
+		"grpc_endpoint", cfg.GRPCEndpoint,
+		"http_endpoint", cfg.HTTPEndpoint,
+	)
+
+	// Wait for context cancellation or error
+	select {
+	case <-ctx.Done():
+		return r.Stop()
+	case err := <-errChan:
+		return err
+	}
+}
+
+// startGRPC starts the gRPC OTLP receiver
+func (r *Receiver) startGRPC(endpoint string) error {
+	r.logger.Info("Starting OTLP gRPC receiver...", "endpoint", endpoint)
+
+	listener, err := net.Listen("tcp", endpoint)
+	if err != nil {
+		r.logger.Error("Failed to create gRPC listener", "endpoint", endpoint, "error", err)
+		return fmt.Errorf("failed to listen on %s: %w", endpoint, err)
+	}
+
+	r.grpcServer = grpc.NewServer()
+	ptraceotlp.RegisterGRPCServer(r.grpcServer, r)
+
+	r.logger.Info("OTLP gRPC receiver listening", "endpoint", endpoint)
+	return r.grpcServer.Serve(listener)
+}
+
+// startHTTP starts the HTTP OTLP receiver
+func (r *Receiver) startHTTP(endpoint string) error {
+	r.logger.Info("Starting OTLP HTTP receiver...", "endpoint", endpoint)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/traces", r.handleHTTPTraces)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	r.httpServer = &http.Server{
+		Addr:    endpoint,
+		Handler: mux,
+	}
+
+	r.logger.Info("OTLP HTTP receiver listening", "endpoint", endpoint)
+	return r.httpServer.ListenAndServe()
+}
+
+// Export implements the ptraceotlp.GRPCServer interface for gRPC traces
+func (r *Receiver) Export(ctx context.Context, req ptraceotlp.ExportRequest) (ptraceotlp.ExportResponse, error) {
+	traces := req.Traces()
+
+	if err := r.processTraces(ctx, traces); err != nil {
+		r.logger.Error("Failed to process gRPC traces", "error", err)
+		return ptraceotlp.NewExportResponse(), err
+	}
+
+	return ptraceotlp.NewExportResponse(), nil
+}
+
+// handleHTTPTraces handles HTTP OTLP trace requests
+func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
+	r.logger.Debug("Received HTTP OTLP request", "method", req.Method, "path", req.URL.Path)
+
+	if req.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := req.Context()
+
+	// Read body
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		r.logger.Error("Failed to read request body", "error", err)
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer req.Body.Close()
+
+	r.logger.Debug("Received trace data", "size_bytes", len(body))
+
+	// Unmarshal using ptrace JSON unmarshaler
+	unmarshaler := &ptrace.JSONUnmarshaler{}
+	traces, err := unmarshaler.UnmarshalTraces(body)
+	if err != nil {
+		r.logger.Error("Failed to unmarshal HTTP traces", "error", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	r.logger.Debug("Unmarshaled traces", "resource_spans", traces.ResourceSpans().Len())
+
+	if err := r.processTraces(ctx, traces); err != nil {
+		r.logger.Error("Failed to process HTTP traces", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	r.logger.Debug("HTTP trace processed successfully")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("{}"))
+}
+
+// processTraces processes incoming traces and stores them
+func (r *Receiver) processTraces(ctx context.Context, traces ptrace.Traces) error {
+	resourceSpans := traces.ResourceSpans()
+	r.logger.Debug("Processing traces", "resource_spans_count", resourceSpans.Len())
+
+	for i := 0; i < resourceSpans.Len(); i++ {
+		rs := resourceSpans.At(i)
+		scopeSpans := rs.ScopeSpans()
+		r.logger.Debug("Processing resource span", "index", i, "scope_spans_count", scopeSpans.Len())
+
+		for j := 0; j < scopeSpans.Len(); j++ {
+			ss := scopeSpans.At(j)
+			spans := ss.Spans()
+			r.logger.Debug("Processing scope span", "index", j, "spans_count", spans.Len())
+
+			for k := 0; k < spans.Len(); k++ {
+				span := spans.At(k)
+				traceID := span.TraceID().String()
+				r.logger.Debug("Processing span", "index", k, "trace_id", traceID, "name", span.Name())
+
+				// Store raw OTEL trace
+				otelTrace := r.parser.ParseOTELSpan(span, rs.Resource())
+				if err := r.storage.CreateOTELTrace(ctx, otelTrace); err != nil {
+					r.logger.Warn("Failed to store OTEL trace",
+						"trace_id", otelTrace.TraceID,
+						"error", err,
+					)
+					// Continue processing other spans
+					continue
+				}
+				r.logger.Debug("Stored raw OTEL trace", "trace_id", traceID)
+
+				// Check if this is an LLM span (has gen_ai.* attributes)
+				isLLM := r.parser.IsLLMSpan(span)
+				r.logger.Debug("Checked if LLM span", "trace_id", traceID, "is_llm", isLLM)
+
+				if isLLM {
+					replayTrace := r.parser.ParseLLMSpan(span, rs.Resource())
+					if replayTrace == nil {
+						r.logger.Warn("ParseLLMSpan returned nil", "trace_id", traceID)
+						continue
+					}
+
+					if err := r.storage.CreateReplayTrace(ctx, replayTrace); err != nil {
+						r.logger.Warn("Failed to store replay trace",
+							"trace_id", replayTrace.TraceID,
+							"error", err,
+						)
+					} else {
+						r.logger.Debug("Stored LLM trace",
+							"trace_id", replayTrace.TraceID,
+							"model", replayTrace.Model,
+							"tokens", replayTrace.TotalTokens,
+						)
+					}
+
+					// Parse and store tool calls
+					toolCaptures := r.parser.ParseToolCalls(span, replayTrace.TraceID)
+					r.logger.Debug("Parsed tool calls", "trace_id", traceID, "count", len(toolCaptures))
+
+					for idx, capture := range toolCaptures {
+						if err := r.storage.CreateToolCapture(ctx, capture); err != nil {
+							r.logger.Warn("Failed to store tool capture",
+								"trace_id", capture.TraceID,
+								"tool_name", capture.ToolName,
+								"error", err,
+							)
+						} else {
+							r.logger.Debug("Stored tool capture",
+								"trace_id", capture.TraceID,
+								"tool_name", capture.ToolName,
+								"step_index", capture.StepIndex,
+								"index", idx,
+							)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	r.logger.Debug("Finished processing traces")
+	return nil
+}
+
+// Stop gracefully stops the receiver
+func (r *Receiver) Stop() error {
+	r.logger.Info("Stopping OTLP receiver...")
+
+	if r.grpcServer != nil {
+		r.grpcServer.GracefulStop()
+	}
+
+	if r.httpServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := r.httpServer.Shutdown(ctx); err != nil {
+			return fmt.Errorf("failed to shutdown HTTP server: %w", err)
+		}
+	}
+
+	r.logger.Info("OTLP receiver stopped")
+	return nil
+}

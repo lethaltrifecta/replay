@@ -1,0 +1,424 @@
+package otelreceiver
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/ptrace"
+
+	"github.com/lethaltrifecta/replay/pkg/storage"
+	"github.com/lethaltrifecta/replay/pkg/utils/logger"
+)
+
+// Parser extracts replay-specific data from OTEL spans
+type Parser struct {
+	logger *logger.Logger
+}
+
+// NewParser creates a new parser
+func NewParser(log *logger.Logger) *Parser {
+	return &Parser{
+		logger: log,
+	}
+}
+
+// ParseOTELSpan converts an OTEL span to our storage model
+func (p *Parser) ParseOTELSpan(span ptrace.Span, resource pcommon.Resource) *storage.OTELTrace {
+	traceID := span.TraceID().String()
+	spanID := span.SpanID().String()
+
+	var parentSpanID *string
+	if !span.ParentSpanID().IsEmpty() {
+		pid := span.ParentSpanID().String()
+		parentSpanID = &pid
+	}
+
+	// Extract service name from resource
+	serviceName := "unknown"
+	if attr, ok := resource.Attributes().Get("service.name"); ok {
+		serviceName = attr.Str()
+	}
+
+	// Convert attributes to JSON
+	attributes := attributesToJSON(span.Attributes())
+	events := eventsToJSON(span.Events())
+	status := statusToJSON(span.Status())
+
+	return &storage.OTELTrace{
+		TraceID:      traceID,
+		SpanID:       spanID,
+		ParentSpanID: parentSpanID,
+		ServiceName:  serviceName,
+		SpanKind:     span.Kind().String(),
+		StartTime:    span.StartTimestamp().AsTime(),
+		EndTime:      span.EndTimestamp().AsTime(),
+		Attributes:   attributes,
+		Events:       events,
+		Status:       status,
+		CreatedAt:    time.Now(),
+	}
+}
+
+// IsLLMSpan checks if a span contains LLM-related attributes
+func (p *Parser) IsLLMSpan(span ptrace.Span) bool {
+	attrs := span.Attributes()
+
+	// Check for gen_ai.* attributes
+	hasGenAI := false
+	attrs.Range(func(k string, v pcommon.Value) bool {
+		if strings.HasPrefix(k, "gen_ai.") {
+			hasGenAI = true
+			return false // Stop iteration
+		}
+		return true
+	})
+
+	return hasGenAI
+}
+
+// ParseLLMSpan extracts LLM-specific data from a span
+func (p *Parser) ParseLLMSpan(span ptrace.Span, resource pcommon.Resource) *storage.ReplayTrace {
+	attrs := span.Attributes()
+
+	traceID := span.TraceID().String()
+	runID := traceID // Use trace ID as run ID for now
+
+	// Extract model and provider
+	model := getStringAttr(attrs, "gen_ai.request.model", "unknown")
+	provider := getStringAttr(attrs, "gen_ai.system", "unknown")
+
+	// Extract prompt (messages)
+	prompt := p.extractPrompt(attrs)
+	if len(prompt) == 0 {
+		p.logger.Debug("No prompt found in span", "trace_id", traceID)
+		return nil
+	}
+
+	// Extract completion
+	completion := p.extractCompletion(attrs)
+
+	// Extract parameters
+	parameters := p.extractParameters(attrs)
+
+	// Extract token counts
+	promptTokens := getIntAttr(attrs, "gen_ai.usage.input_tokens", 0)
+	completionTokens := getIntAttr(attrs, "gen_ai.usage.output_tokens", 0)
+	totalTokens := promptTokens + completionTokens
+
+	// Calculate latency
+	latencyMS := int(span.EndTimestamp().AsTime().Sub(span.StartTimestamp().AsTime()).Milliseconds())
+
+	return &storage.ReplayTrace{
+		TraceID:          traceID,
+		RunID:            runID,
+		CreatedAt:        span.StartTimestamp().AsTime(),
+		Provider:         provider,
+		Model:            model,
+		Prompt:           prompt,
+		Completion:       completion,
+		Parameters:       parameters,
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      totalTokens,
+		LatencyMS:        latencyMS,
+		Metadata:         storage.JSONB{},
+	}
+}
+
+// extractPrompt extracts prompt messages from gen_ai.prompt.* attributes
+func (p *Parser) extractPrompt(attrs pcommon.Map) storage.JSONB {
+	messages := []map[string]string{}
+	index := 0
+
+	for {
+		roleKey := fmt.Sprintf("gen_ai.prompt.%d.role", index)
+		contentKey := fmt.Sprintf("gen_ai.prompt.%d.content", index)
+
+		roleAttr, hasRole := attrs.Get(roleKey)
+		contentAttr, hasContent := attrs.Get(contentKey)
+
+		if !hasRole || !hasContent {
+			break
+		}
+
+		messages = append(messages, map[string]string{
+			"role":    roleAttr.Str(),
+			"content": contentAttr.Str(),
+		})
+
+		index++
+	}
+
+	if len(messages) == 0 {
+		return storage.JSONB{}
+	}
+
+	return storage.JSONB{"messages": messages}
+}
+
+// extractCompletion extracts completion from gen_ai.completion.* attributes
+func (p *Parser) extractCompletion(attrs pcommon.Map) string {
+	// Try gen_ai.completion.0.content first
+	if attr, ok := attrs.Get("gen_ai.completion.0.content"); ok {
+		return attr.Str()
+	}
+
+	// Try gen_ai.response.text
+	if attr, ok := attrs.Get("gen_ai.response.text"); ok {
+		return attr.Str()
+	}
+
+	// Try gen_ai.completion
+	if attr, ok := attrs.Get("gen_ai.completion"); ok {
+		return attr.Str()
+	}
+
+	return ""
+}
+
+// extractParameters extracts LLM parameters from gen_ai.request.* attributes
+func (p *Parser) extractParameters(attrs pcommon.Map) storage.JSONB {
+	params := storage.JSONB{}
+
+	// Common parameters
+	if attr, ok := attrs.Get("gen_ai.request.temperature"); ok {
+		params["temperature"] = attr.Double()
+	}
+	if attr, ok := attrs.Get("gen_ai.request.top_p"); ok {
+		params["top_p"] = attr.Double()
+	}
+	if attr, ok := attrs.Get("gen_ai.request.max_tokens"); ok {
+		params["max_tokens"] = attr.Int()
+	}
+	if attr, ok := attrs.Get("gen_ai.request.top_k"); ok {
+		params["top_k"] = attr.Int()
+	}
+	if attr, ok := attrs.Get("gen_ai.request.frequency_penalty"); ok {
+		params["frequency_penalty"] = attr.Double()
+	}
+	if attr, ok := attrs.Get("gen_ai.request.presence_penalty"); ok {
+		params["presence_penalty"] = attr.Double()
+	}
+
+	return params
+}
+
+// ParseToolCalls extracts tool calls from span events or attributes
+func (p *Parser) ParseToolCalls(span ptrace.Span, traceID string) []*storage.ToolCapture {
+	captures := []*storage.ToolCapture{}
+
+	// Check for tool call events
+	events := span.Events()
+	stepIndex := 0
+
+	for i := 0; i < events.Len(); i++ {
+		event := events.At(i)
+
+		// Look for tool-related events (convention: event name starts with "tool")
+		if !strings.HasPrefix(event.Name(), "tool") {
+			continue
+		}
+
+		attrs := event.Attributes()
+
+		toolName := getStringAttr(attrs, "tool.name", "")
+		if toolName == "" {
+			// Try alternative attribute names
+			toolName = getStringAttr(attrs, "name", "")
+		}
+
+		if toolName == "" {
+			continue
+		}
+
+		// Extract args
+		var args storage.JSONB
+		if argsAttr, ok := attrs.Get("tool.args"); ok {
+			if argsAttr.Type() == pcommon.ValueTypeStr {
+				// Parse JSON string
+				var argsMap map[string]interface{}
+				if err := json.Unmarshal([]byte(argsAttr.Str()), &argsMap); err == nil {
+					args = storage.JSONB(argsMap)
+				}
+			} else if argsAttr.Type() == pcommon.ValueTypeMap {
+				args = attributesToJSON(argsAttr.Map())
+			}
+		}
+
+		if args == nil {
+			args = storage.JSONB{}
+		}
+
+		// Extract result
+		var result storage.JSONB
+		if resultAttr, ok := attrs.Get("tool.result"); ok {
+			if resultAttr.Type() == pcommon.ValueTypeStr {
+				// Parse JSON string
+				var resultMap map[string]interface{}
+				if err := json.Unmarshal([]byte(resultAttr.Str()), &resultMap); err == nil {
+					result = storage.JSONB(resultMap)
+				} else {
+					// Store as string if not valid JSON
+					result = storage.JSONB{"value": resultAttr.Str()}
+				}
+			} else if resultAttr.Type() == pcommon.ValueTypeMap {
+				result = attributesToJSON(resultAttr.Map())
+			}
+		}
+
+		if result == nil {
+			result = storage.JSONB{}
+		}
+
+		// Extract error
+		var errorStr *string
+		if errorAttr, ok := attrs.Get("tool.error"); ok {
+			err := errorAttr.Str()
+			errorStr = &err
+		}
+
+		// Calculate args hash for freeze mode lookup
+		argsHash := calculateArgsHash(args)
+
+		// Determine risk class
+		riskClass := determineRiskClass(toolName, args)
+
+		// Calculate latency (if available)
+		latencyMS := 0
+		if latencyAttr, ok := attrs.Get("tool.latency_ms"); ok {
+			latencyMS = int(latencyAttr.Int())
+		}
+
+		capture := &storage.ToolCapture{
+			TraceID:   traceID,
+			StepIndex: stepIndex,
+			ToolName:  toolName,
+			Args:      args,
+			ArgsHash:  argsHash,
+			Result:    result,
+			Error:     errorStr,
+			LatencyMS: latencyMS,
+			RiskClass: riskClass,
+			CreatedAt: event.Timestamp().AsTime(),
+		}
+
+		captures = append(captures, capture)
+		stepIndex++
+	}
+
+	return captures
+}
+
+// Helper functions
+
+func getStringAttr(attrs pcommon.Map, key string, defaultVal string) string {
+	if attr, ok := attrs.Get(key); ok {
+		return attr.Str()
+	}
+	return defaultVal
+}
+
+func getIntAttr(attrs pcommon.Map, key string, defaultVal int) int {
+	if attr, ok := attrs.Get(key); ok {
+		return int(attr.Int())
+	}
+	return defaultVal
+}
+
+func attributesToJSON(attrs pcommon.Map) storage.JSONB {
+	result := make(storage.JSONB)
+
+	attrs.Range(func(k string, v pcommon.Value) bool {
+		result[k] = valueToInterface(v)
+		return true
+	})
+
+	return result
+}
+
+func valueToInterface(v pcommon.Value) interface{} {
+	switch v.Type() {
+	case pcommon.ValueTypeStr:
+		return v.Str()
+	case pcommon.ValueTypeInt:
+		return v.Int()
+	case pcommon.ValueTypeDouble:
+		return v.Double()
+	case pcommon.ValueTypeBool:
+		return v.Bool()
+	case pcommon.ValueTypeMap:
+		return attributesToJSON(v.Map())
+	case pcommon.ValueTypeSlice:
+		slice := v.Slice()
+		result := make([]interface{}, slice.Len())
+		for i := 0; i < slice.Len(); i++ {
+			result[i] = valueToInterface(slice.At(i))
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func eventsToJSON(events ptrace.SpanEventSlice) storage.JSONB {
+	result := make([]map[string]interface{}, events.Len())
+
+	for i := 0; i < events.Len(); i++ {
+		event := events.At(i)
+		result[i] = map[string]interface{}{
+			"name":       event.Name(),
+			"timestamp":  event.Timestamp().AsTime().Unix(),
+			"attributes": attributesToJSON(event.Attributes()),
+		}
+	}
+
+	return storage.JSONB{"events": result}
+}
+
+func statusToJSON(status ptrace.Status) storage.JSONB {
+	return storage.JSONB{
+		"code":    status.Code().String(),
+		"message": status.Message(),
+	}
+}
+
+func calculateArgsHash(args storage.JSONB) string {
+	// Normalize JSON and calculate hash for consistent lookup
+	normalized, err := json.Marshal(args)
+	if err != nil {
+		return ""
+	}
+
+	hash := sha256.Sum256(normalized)
+	return fmt.Sprintf("%x", hash)
+}
+
+func determineRiskClass(toolName string, args storage.JSONB) string {
+	// Simple heuristic based on tool name
+	lowerName := strings.ToLower(toolName)
+
+	// Destructive operations
+	if strings.Contains(lowerName, "delete") ||
+		strings.Contains(lowerName, "remove") ||
+		strings.Contains(lowerName, "drop") ||
+		strings.Contains(lowerName, "terminate") {
+		return storage.RiskClassDestructive
+	}
+
+	// Write operations
+	if strings.Contains(lowerName, "write") ||
+		strings.Contains(lowerName, "create") ||
+		strings.Contains(lowerName, "update") ||
+		strings.Contains(lowerName, "insert") ||
+		strings.Contains(lowerName, "modify") ||
+		strings.Contains(lowerName, "edit") {
+		return storage.RiskClassWrite
+	}
+
+	// Default to read
+	return storage.RiskClassRead
+}
