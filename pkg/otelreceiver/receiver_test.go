@@ -41,8 +41,8 @@ func (m *mockStorage) CreateToolCapture(ctx context.Context, capture *storage.To
 func (m *mockStorage) Close() error                                                                        { return nil }
 func (m *mockStorage) Ping(ctx context.Context) error                                                      { return nil }
 func (m *mockStorage) Migrate(ctx context.Context) error                                                   { return nil }
-func (m *mockStorage) GetOTELTrace(ctx context.Context, traceID string) (*storage.OTELTrace, error)       { return nil, nil }
-func (m *mockStorage) GetReplayTrace(ctx context.Context, traceID string) (*storage.ReplayTrace, error)   { return nil, nil }
+func (m *mockStorage) GetOTELTraceSpans(ctx context.Context, traceID string) ([]*storage.OTELTrace, error) { return nil, nil }
+func (m *mockStorage) GetReplayTraceSpans(ctx context.Context, traceID string) ([]*storage.ReplayTrace, error) { return nil, nil }
 func (m *mockStorage) ListReplayTraces(ctx context.Context, filters storage.TraceFilters) ([]*storage.ReplayTrace, error) { return nil, nil }
 func (m *mockStorage) GetToolCapturesByTrace(ctx context.Context, traceID string) ([]*storage.ToolCapture, error) { return nil, nil }
 func (m *mockStorage) GetToolCaptureByArgs(ctx context.Context, toolName string, argsHash string) (*storage.ToolCapture, error) { return nil, nil }
@@ -106,6 +106,7 @@ func TestParser_ParseLLMSpan(t *testing.T) {
 
 	span := ptrace.NewSpan()
 	span.SetTraceID(pcommon.TraceID([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}))
+	span.SetSpanID(pcommon.SpanID([8]byte{1, 2, 3, 4, 5, 6, 7, 8}))
 	span.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Now()))
 	span.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Now().Add(time.Second)))
 
@@ -127,6 +128,7 @@ func TestParser_ParseLLMSpan(t *testing.T) {
 	require.NotNil(t, trace)
 	assert.Equal(t, "anthropic", trace.Provider)
 	assert.Equal(t, "claude-3-5-sonnet-20241022", trace.Model)
+	assert.Equal(t, "0102030405060708", trace.SpanID)
 	assert.Equal(t, 10, trace.PromptTokens)
 	assert.Equal(t, 5, trace.CompletionTokens)
 	assert.Equal(t, 15, trace.TotalTokens)
@@ -142,4 +144,69 @@ func TestReceiver_New(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, receiver)
 	assert.NotNil(t, receiver.parser)
+}
+
+func TestCalculateArgsHash_Deterministic(t *testing.T) {
+	// Same logical content with different Go types should produce the same hash
+	t.Run("int vs float64 for whole numbers", func(t *testing.T) {
+		args1 := storage.JSONB{"count": int(5), "name": "test"}
+		args2 := storage.JSONB{"count": float64(5), "name": "test"}
+
+		hash1 := calculateArgsHash(args1)
+		hash2 := calculateArgsHash(args2)
+
+		assert.Equal(t, hash1, hash2, "int(5) and float64(5) should produce the same hash")
+		assert.NotEmpty(t, hash1)
+	})
+
+	t.Run("int64 vs float64", func(t *testing.T) {
+		args1 := storage.JSONB{"value": int64(42)}
+		args2 := storage.JSONB{"value": float64(42)}
+
+		assert.Equal(t, calculateArgsHash(args1), calculateArgsHash(args2))
+	})
+
+	t.Run("nested maps produce consistent hashes", func(t *testing.T) {
+		args1 := storage.JSONB{
+			"outer": map[string]interface{}{
+				"b": "second",
+				"a": "first",
+			},
+		}
+		args2 := storage.JSONB{
+			"outer": map[string]interface{}{
+				"a": "first",
+				"b": "second",
+			},
+		}
+
+		assert.Equal(t, calculateArgsHash(args1), calculateArgsHash(args2))
+	})
+
+	t.Run("different values produce different hashes", func(t *testing.T) {
+		args1 := storage.JSONB{"query": "hello"}
+		args2 := storage.JSONB{"query": "world"}
+
+		assert.NotEqual(t, calculateArgsHash(args1), calculateArgsHash(args2))
+	})
+
+	t.Run("nested JSONB type is normalized", func(t *testing.T) {
+		args1 := storage.JSONB{
+			"config": storage.JSONB{"key": int(1)},
+		}
+		args2 := storage.JSONB{
+			"config": map[string]interface{}{"key": float64(1)},
+		}
+
+		assert.Equal(t, calculateArgsHash(args1), calculateArgsHash(args2))
+	})
+
+	t.Run("empty args produce consistent hash", func(t *testing.T) {
+		args1 := storage.JSONB{}
+		args2 := storage.JSONB{}
+
+		hash := calculateArgsHash(args1)
+		assert.Equal(t, hash, calculateArgsHash(args2))
+		assert.NotEmpty(t, hash)
+	})
 }

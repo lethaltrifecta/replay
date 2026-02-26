@@ -75,10 +75,12 @@ func TestPostgresStorage_ReplayTraces(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create a replay trace
-	trace := &ReplayTrace{
+	// Create a replay trace (first span in a multi-step agent run)
+	trace1 := &ReplayTrace{
 		TraceID:          "trace-123",
-		RunID:            "run-123",
+		SpanID:           "span-001",
+		RunID:            "trace-123",
+		StepIndex:        0,
 		CreatedAt:        time.Now(),
 		Provider:         "anthropic",
 		Model:            "claude-3-5-sonnet-20241022",
@@ -91,20 +93,46 @@ func TestPostgresStorage_ReplayTraces(t *testing.T) {
 		LatencyMS:        100,
 	}
 
-	err := storage.CreateReplayTrace(ctx, trace)
+	err := storage.CreateReplayTrace(ctx, trace1)
 	require.NoError(t, err)
+	assert.NotZero(t, trace1.ID)
 
-	// Get the trace
-	retrieved, err := storage.GetReplayTrace(ctx, "trace-123")
+	// Create a second span in the same trace (multi-step agent)
+	trace2 := &ReplayTrace{
+		TraceID:          "trace-123",
+		SpanID:           "span-002",
+		RunID:            "trace-123",
+		StepIndex:        1,
+		CreatedAt:        time.Now(),
+		Provider:         "anthropic",
+		Model:            "claude-3-5-sonnet-20241022",
+		Prompt:           JSONB{"messages": []interface{}{map[string]string{"role": "user", "content": "Follow up"}}},
+		Completion:       "Sure, here's the follow up.",
+		Parameters:       JSONB{"temperature": 0.7},
+		PromptTokens:     20,
+		CompletionTokens: 10,
+		TotalTokens:      30,
+		LatencyMS:        150,
+	}
+
+	err = storage.CreateReplayTrace(ctx, trace2)
 	require.NoError(t, err)
-	assert.Equal(t, "trace-123", retrieved.TraceID)
-	assert.Equal(t, "claude-3-5-sonnet-20241022", retrieved.Model)
-	assert.Equal(t, 15, retrieved.TotalTokens)
+	assert.NotZero(t, trace2.ID)
+	assert.NotEqual(t, trace1.ID, trace2.ID)
+
+	// Get all spans for the trace — should return both
+	spans, err := storage.GetReplayTraceSpans(ctx, "trace-123")
+	require.NoError(t, err)
+	assert.Len(t, spans, 2)
+	assert.Equal(t, "span-001", spans[0].SpanID)
+	assert.Equal(t, "span-002", spans[1].SpanID)
+	assert.Equal(t, 0, spans[0].StepIndex)
+	assert.Equal(t, 1, spans[1].StepIndex)
 
 	// List traces
 	traces, err := storage.ListReplayTraces(ctx, TraceFilters{Limit: 10})
 	require.NoError(t, err)
-	assert.Len(t, traces, 1)
+	assert.Len(t, traces, 2)
 }
 
 func TestPostgresStorage_ToolCaptures(t *testing.T) {
@@ -116,11 +144,12 @@ func TestPostgresStorage_ToolCaptures(t *testing.T) {
 	// Create a replay trace first
 	trace := &ReplayTrace{
 		TraceID:    "trace-456",
-		RunID:      "run-456",
+		SpanID:     "span-456",
+		RunID:      "trace-456",
 		CreatedAt:  time.Now(),
 		Provider:   "anthropic",
 		Model:      "claude-3-5-sonnet-20241022",
-		Prompt:     JSONB{},
+		Prompt:     JSONB{"messages": []interface{}{}},
 		Completion: "test",
 	}
 	err := storage.CreateReplayTrace(ctx, trace)
@@ -129,6 +158,7 @@ func TestPostgresStorage_ToolCaptures(t *testing.T) {
 	// Create a tool capture
 	capture := &ToolCapture{
 		TraceID:   "trace-456",
+		SpanID:    "span-456",
 		StepIndex: 0,
 		ToolName:  "search",
 		Args:      JSONB{"query": "test"},
@@ -148,6 +178,7 @@ func TestPostgresStorage_ToolCaptures(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, captures, 1)
 	assert.Equal(t, "search", captures[0].ToolName)
+	assert.Equal(t, "span-456", captures[0].SpanID)
 
 	// Get tool capture by args
 	retrieved, err := storage.GetToolCaptureByArgs(ctx, "search", "abc123")
@@ -162,20 +193,7 @@ func TestPostgresStorage_Experiments(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create a replay trace first
-	trace := &ReplayTrace{
-		TraceID:    "trace-789",
-		RunID:      "run-789",
-		CreatedAt:  time.Now(),
-		Provider:   "anthropic",
-		Model:      "claude-3-5-sonnet-20241022",
-		Prompt:     JSONB{},
-		Completion: "test",
-	}
-	err := storage.CreateReplayTrace(ctx, trace)
-	require.NoError(t, err)
-
-	// Create an experiment
+	// Create an experiment (baseline_trace_id is a logical reference, no FK)
 	expID := uuid.New()
 	exp := &Experiment{
 		ID:              expID,

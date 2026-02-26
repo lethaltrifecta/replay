@@ -76,89 +76,118 @@ func (s *PostgresStorage) CreateOTELTrace(ctx context.Context, trace *OTELTrace)
 			trace_id, span_id, parent_span_id, service_name, span_kind,
 			start_time, end_time, attributes, events, status, created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (trace_id, span_id) DO NOTHING
+		RETURNING id
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	err := s.db.QueryRowContext(ctx, query,
 		trace.TraceID, trace.SpanID, trace.ParentSpanID, trace.ServiceName, trace.SpanKind,
 		trace.StartTime, trace.EndTime, trace.Attributes, trace.Events, trace.Status, trace.CreatedAt,
-	)
+	).Scan(&trace.ID)
 
+	// ON CONFLICT DO NOTHING returns no rows — treat as success
+	if err == sql.ErrNoRows {
+		return nil
+	}
 	return err
 }
 
-// GetOTELTrace retrieves an OTEL trace by ID
-func (s *PostgresStorage) GetOTELTrace(ctx context.Context, traceID string) (*OTELTrace, error) {
+// GetOTELTraceSpans retrieves all spans for a trace ID
+func (s *PostgresStorage) GetOTELTraceSpans(ctx context.Context, traceID string) ([]*OTELTrace, error) {
 	query := `
-		SELECT trace_id, span_id, parent_span_id, service_name, span_kind,
+		SELECT id, trace_id, span_id, parent_span_id, service_name, span_kind,
 		       start_time, end_time, attributes, events, status, created_at
 		FROM otel_traces
 		WHERE trace_id = $1
+		ORDER BY start_time ASC
 	`
 
-	var trace OTELTrace
-	err := s.db.QueryRowContext(ctx, query, traceID).Scan(
-		&trace.TraceID, &trace.SpanID, &trace.ParentSpanID, &trace.ServiceName, &trace.SpanKind,
-		&trace.StartTime, &trace.EndTime, &trace.Attributes, &trace.Events, &trace.Status, &trace.CreatedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("trace not found: %s", traceID)
-	}
+	rows, err := s.db.QueryContext(ctx, query, traceID)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	return &trace, nil
+	var traces []*OTELTrace
+	for rows.Next() {
+		var trace OTELTrace
+		err := rows.Scan(
+			&trace.ID, &trace.TraceID, &trace.SpanID, &trace.ParentSpanID, &trace.ServiceName, &trace.SpanKind,
+			&trace.StartTime, &trace.EndTime, &trace.Attributes, &trace.Events, &trace.Status, &trace.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		traces = append(traces, &trace)
+	}
+
+	return traces, rows.Err()
 }
 
 // CreateReplayTrace creates a new replay trace record
 func (s *PostgresStorage) CreateReplayTrace(ctx context.Context, trace *ReplayTrace) error {
 	query := `
 		INSERT INTO replay_traces (
-			trace_id, run_id, created_at, provider, model, prompt, completion,
+			trace_id, span_id, run_id, step_index, created_at, provider, model, prompt, completion,
 			parameters, prompt_tokens, completion_tokens, total_tokens, latency_ms, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT (trace_id, span_id) DO NOTHING
+		RETURNING id
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
-		trace.TraceID, trace.RunID, trace.CreatedAt, trace.Provider, trace.Model, trace.Prompt,
+	err := s.db.QueryRowContext(ctx, query,
+		trace.TraceID, trace.SpanID, trace.RunID, trace.StepIndex, trace.CreatedAt,
+		trace.Provider, trace.Model, trace.Prompt,
 		trace.Completion, trace.Parameters, trace.PromptTokens, trace.CompletionTokens,
 		trace.TotalTokens, trace.LatencyMS, trace.Metadata,
-	)
+	).Scan(&trace.ID)
 
+	// ON CONFLICT DO NOTHING returns no rows — treat as success
+	if err == sql.ErrNoRows {
+		return nil
+	}
 	return err
 }
 
-// GetReplayTrace retrieves a replay trace by ID
-func (s *PostgresStorage) GetReplayTrace(ctx context.Context, traceID string) (*ReplayTrace, error) {
+// GetReplayTraceSpans retrieves all LLM calls (spans) for a trace ID,
+// ordered by step_index to reconstruct the agent conversation flow.
+func (s *PostgresStorage) GetReplayTraceSpans(ctx context.Context, traceID string) ([]*ReplayTrace, error) {
 	query := `
-		SELECT trace_id, run_id, created_at, provider, model, prompt, completion,
+		SELECT id, trace_id, span_id, run_id, step_index, created_at, provider, model, prompt, completion,
 		       parameters, prompt_tokens, completion_tokens, total_tokens, latency_ms, metadata
 		FROM replay_traces
 		WHERE trace_id = $1
+		ORDER BY step_index ASC, created_at ASC
 	`
 
-	var trace ReplayTrace
-	err := s.db.QueryRowContext(ctx, query, traceID).Scan(
-		&trace.TraceID, &trace.RunID, &trace.CreatedAt, &trace.Provider, &trace.Model, &trace.Prompt,
-		&trace.Completion, &trace.Parameters, &trace.PromptTokens, &trace.CompletionTokens,
-		&trace.TotalTokens, &trace.LatencyMS, &trace.Metadata,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("replay trace not found: %s", traceID)
-	}
+	rows, err := s.db.QueryContext(ctx, query, traceID)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	return &trace, nil
+	var traces []*ReplayTrace
+	for rows.Next() {
+		var trace ReplayTrace
+		err := rows.Scan(
+			&trace.ID, &trace.TraceID, &trace.SpanID, &trace.RunID, &trace.StepIndex, &trace.CreatedAt,
+			&trace.Provider, &trace.Model, &trace.Prompt,
+			&trace.Completion, &trace.Parameters, &trace.PromptTokens, &trace.CompletionTokens,
+			&trace.TotalTokens, &trace.LatencyMS, &trace.Metadata,
+		)
+		if err != nil {
+			return nil, err
+		}
+		traces = append(traces, &trace)
+	}
+
+	return traces, rows.Err()
 }
 
 // ListReplayTraces lists replay traces with filters
 func (s *PostgresStorage) ListReplayTraces(ctx context.Context, filters TraceFilters) ([]*ReplayTrace, error) {
 	query := `
-		SELECT trace_id, run_id, created_at, provider, model, prompt, completion,
+		SELECT id, trace_id, span_id, run_id, step_index, created_at, provider, model, prompt, completion,
 		       parameters, prompt_tokens, completion_tokens, total_tokens, latency_ms, metadata
 		FROM replay_traces
 		WHERE 1=1
@@ -213,7 +242,8 @@ func (s *PostgresStorage) ListReplayTraces(ctx context.Context, filters TraceFil
 	for rows.Next() {
 		var trace ReplayTrace
 		err := rows.Scan(
-			&trace.TraceID, &trace.RunID, &trace.CreatedAt, &trace.Provider, &trace.Model, &trace.Prompt,
+			&trace.ID, &trace.TraceID, &trace.SpanID, &trace.RunID, &trace.StepIndex, &trace.CreatedAt,
+			&trace.Provider, &trace.Model, &trace.Prompt,
 			&trace.Completion, &trace.Parameters, &trace.PromptTokens, &trace.CompletionTokens,
 			&trace.TotalTokens, &trace.LatencyMS, &trace.Metadata,
 		)
@@ -230,14 +260,14 @@ func (s *PostgresStorage) ListReplayTraces(ctx context.Context, filters TraceFil
 func (s *PostgresStorage) CreateToolCapture(ctx context.Context, capture *ToolCapture) error {
 	query := `
 		INSERT INTO tool_captures (
-			trace_id, step_index, tool_name, args, args_hash, result, error,
+			trace_id, span_id, step_index, tool_name, args, args_hash, result, error,
 			latency_ms, risk_class, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id
 	`
 
 	return s.db.QueryRowContext(ctx, query,
-		capture.TraceID, capture.StepIndex, capture.ToolName, capture.Args, capture.ArgsHash,
+		capture.TraceID, capture.SpanID, capture.StepIndex, capture.ToolName, capture.Args, capture.ArgsHash,
 		capture.Result, capture.Error, capture.LatencyMS, capture.RiskClass, capture.CreatedAt,
 	).Scan(&capture.ID)
 }
@@ -245,7 +275,7 @@ func (s *PostgresStorage) CreateToolCapture(ctx context.Context, capture *ToolCa
 // GetToolCapturesByTrace retrieves all tool captures for a trace
 func (s *PostgresStorage) GetToolCapturesByTrace(ctx context.Context, traceID string) ([]*ToolCapture, error) {
 	query := `
-		SELECT id, trace_id, step_index, tool_name, args, args_hash, result, error,
+		SELECT id, trace_id, span_id, step_index, tool_name, args, args_hash, result, error,
 		       latency_ms, risk_class, created_at
 		FROM tool_captures
 		WHERE trace_id = $1
@@ -262,7 +292,7 @@ func (s *PostgresStorage) GetToolCapturesByTrace(ctx context.Context, traceID st
 	for rows.Next() {
 		var capture ToolCapture
 		err := rows.Scan(
-			&capture.ID, &capture.TraceID, &capture.StepIndex, &capture.ToolName, &capture.Args,
+			&capture.ID, &capture.TraceID, &capture.SpanID, &capture.StepIndex, &capture.ToolName, &capture.Args,
 			&capture.ArgsHash, &capture.Result, &capture.Error, &capture.LatencyMS,
 			&capture.RiskClass, &capture.CreatedAt,
 		)
@@ -275,19 +305,21 @@ func (s *PostgresStorage) GetToolCapturesByTrace(ctx context.Context, traceID st
 	return captures, rows.Err()
 }
 
-// GetToolCaptureByArgs retrieves a tool capture by tool name and args hash
+// GetToolCaptureByArgs retrieves a tool capture by tool name and args hash.
+// Used by Freeze-Tools in freeze mode to look up pre-recorded results.
 func (s *PostgresStorage) GetToolCaptureByArgs(ctx context.Context, toolName string, argsHash string) (*ToolCapture, error) {
 	query := `
-		SELECT id, trace_id, step_index, tool_name, args, args_hash, result, error,
+		SELECT id, trace_id, span_id, step_index, tool_name, args, args_hash, result, error,
 		       latency_ms, risk_class, created_at
 		FROM tool_captures
 		WHERE tool_name = $1 AND args_hash = $2
+		ORDER BY created_at DESC
 		LIMIT 1
 	`
 
 	var capture ToolCapture
 	err := s.db.QueryRowContext(ctx, query, toolName, argsHash).Scan(
-		&capture.ID, &capture.TraceID, &capture.StepIndex, &capture.ToolName, &capture.Args,
+		&capture.ID, &capture.TraceID, &capture.SpanID, &capture.StepIndex, &capture.ToolName, &capture.Args,
 		&capture.ArgsHash, &capture.Result, &capture.Error, &capture.LatencyMS,
 		&capture.RiskClass, &capture.CreatedAt,
 	)

@@ -83,7 +83,7 @@ func main() {
 
 	// Test ParseToolCalls
 	fmt.Println("\nParsing tool calls...")
-	toolCaptures := parser.ParseToolCalls(span, replayTrace.TraceID)
+	toolCaptures := parser.ParseToolCalls(span, replayTrace.TraceID, replayTrace.SpanID)
 	fmt.Printf("  Found %d tool calls\n", len(toolCaptures))
 
 	for i, capture := range toolCaptures {
@@ -125,12 +125,16 @@ func main() {
 	fmt.Printf("  ✅ %d tool captures stored successfully\n", len(toolCaptures))
 
 	// Verify storage
-	storedTrace, err := store.GetReplayTrace(ctx, replayTrace.TraceID)
+	storedSpans, err := store.GetReplayTraceSpans(ctx, replayTrace.TraceID)
 	if err != nil {
 		fmt.Printf("  ❌ Failed to retrieve trace: %v\n", err)
 		return
 	}
-	fmt.Printf("  ✅ Retrieved trace: model=%s, tokens=%d\n", storedTrace.Model, storedTrace.TotalTokens)
+	if len(storedSpans) == 0 {
+		fmt.Println("  ❌ No spans found for trace")
+		return
+	}
+	fmt.Printf("  ✅ Retrieved %d span(s): model=%s, tokens=%d\n", len(storedSpans), storedSpans[0].Model, storedSpans[0].TotalTokens)
 
 	fmt.Println("\n✅ All tests passed!")
 }

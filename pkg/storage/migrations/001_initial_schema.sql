@@ -3,9 +3,11 @@
 
 -- ============================================================================
 -- OTEL Traces (raw capture from OTLP)
+-- A single trace contains multiple spans (one per operation).
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS otel_traces (
-    trace_id VARCHAR(255) PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
+    trace_id VARCHAR(255) NOT NULL,
     span_id VARCHAR(255) NOT NULL,
     parent_span_id VARCHAR(255),
     service_name VARCHAR(255) NOT NULL,
@@ -15,18 +17,25 @@ CREATE TABLE IF NOT EXISTS otel_traces (
     attributes JSONB,
     events JSONB,
     status JSONB,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(trace_id, span_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_otel_traces_trace_id ON otel_traces(trace_id);
 CREATE INDEX IF NOT EXISTS idx_otel_traces_start_time ON otel_traces(start_time);
 CREATE INDEX IF NOT EXISTS idx_otel_traces_service ON otel_traces(service_name);
 
 -- ============================================================================
 -- Parsed Traces (replay-specific)
+-- Each row is one LLM call (span). A multi-step agent run produces multiple
+-- rows sharing the same trace_id, ordered by step_index.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS replay_traces (
-    trace_id VARCHAR(255) PRIMARY KEY,
-    run_id VARCHAR(255) UNIQUE NOT NULL,
+    id SERIAL PRIMARY KEY,
+    trace_id VARCHAR(255) NOT NULL,
+    span_id VARCHAR(255) NOT NULL,
+    run_id VARCHAR(255) NOT NULL,
+    step_index INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL,
     provider VARCHAR(100) NOT NULL,
     model VARCHAR(255) NOT NULL,
@@ -37,9 +46,11 @@ CREATE TABLE IF NOT EXISTS replay_traces (
     completion_tokens INT NOT NULL DEFAULT 0,
     total_tokens INT NOT NULL DEFAULT 0,
     latency_ms INT NOT NULL DEFAULT 0,
-    metadata JSONB
+    metadata JSONB,
+    UNIQUE(trace_id, span_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_replay_traces_trace_id ON replay_traces(trace_id);
 CREATE INDEX IF NOT EXISTS idx_replay_traces_model ON replay_traces(model);
 CREATE INDEX IF NOT EXISTS idx_replay_traces_created ON replay_traces(created_at);
 
@@ -48,7 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_replay_traces_created ON replay_traces(created_at
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS tool_captures (
     id SERIAL PRIMARY KEY,
-    trace_id VARCHAR(255) NOT NULL REFERENCES replay_traces(trace_id) ON DELETE CASCADE,
+    trace_id VARCHAR(255) NOT NULL,
+    span_id VARCHAR(255) NOT NULL,
     step_index INT NOT NULL,
     tool_name VARCHAR(255) NOT NULL,
     args JSONB NOT NULL,
@@ -58,19 +70,21 @@ CREATE TABLE IF NOT EXISTS tool_captures (
     latency_ms INT NOT NULL DEFAULT 0,
     risk_class VARCHAR(50) NOT NULL,
     created_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(trace_id, step_index)
+    UNIQUE(trace_id, span_id, step_index)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_captures_trace ON tool_captures(trace_id);
+CREATE INDEX IF NOT EXISTS idx_tool_captures_span ON tool_captures(trace_id, span_id);
 CREATE INDEX IF NOT EXISTS idx_tool_captures_hash ON tool_captures(tool_name, args_hash);
 
 -- ============================================================================
 -- Experiments
+-- baseline_trace_id refers to a trace (agent run), not a single span.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS experiments (
     id UUID PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    baseline_trace_id VARCHAR(255) NOT NULL REFERENCES replay_traces(trace_id),
+    baseline_trace_id VARCHAR(255) NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'pending',
     progress FLOAT NOT NULL DEFAULT 0.0,
     config JSONB,
@@ -89,7 +103,7 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
     experiment_id UUID NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
     run_type VARCHAR(50) NOT NULL,
     variant_config JSONB NOT NULL,
-    trace_id VARCHAR(255) REFERENCES replay_traces(trace_id),
+    trace_id VARCHAR(255),
     status VARCHAR(50) NOT NULL DEFAULT 'pending',
     error TEXT,
     created_at TIMESTAMP DEFAULT NOW(),

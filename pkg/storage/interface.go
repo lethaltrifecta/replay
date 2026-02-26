@@ -16,9 +16,9 @@ type Storage interface {
 
 	// Traces
 	CreateOTELTrace(ctx context.Context, trace *OTELTrace) error
-	GetOTELTrace(ctx context.Context, traceID string) (*OTELTrace, error)
+	GetOTELTraceSpans(ctx context.Context, traceID string) ([]*OTELTrace, error)
 	CreateReplayTrace(ctx context.Context, trace *ReplayTrace) error
-	GetReplayTrace(ctx context.Context, traceID string) (*ReplayTrace, error)
+	GetReplayTraceSpans(ctx context.Context, traceID string) ([]*ReplayTrace, error)
 	ListReplayTraces(ctx context.Context, filters TraceFilters) ([]*ReplayTrace, error)
 
 	// Tool Captures (for Freeze-Tools)

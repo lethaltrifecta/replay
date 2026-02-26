@@ -234,7 +234,7 @@ func (r *Receiver) processTraces(ctx context.Context, traces ptrace.Traces) erro
 					}
 
 					// Parse and store tool calls
-					toolCaptures := r.parser.ParseToolCalls(span, replayTrace.TraceID)
+					toolCaptures := r.parser.ParseToolCalls(span, replayTrace.TraceID, replayTrace.SpanID)
 					r.logger.Debug("Parsed tool calls", "trace_id", traceID, "count", len(toolCaptures))
 
 					for idx, capture := range toolCaptures {

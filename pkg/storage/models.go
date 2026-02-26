@@ -35,8 +35,10 @@ func (j *JSONB) Scan(value interface{}) error {
 	return json.Unmarshal(bytes, j)
 }
 
-// OTELTrace represents a raw OTEL trace span
+// OTELTrace represents a raw OTEL trace span.
+// A single trace_id can have many spans (one per operation).
 type OTELTrace struct {
+	ID            int       `db:"id"`
 	TraceID       string    `db:"trace_id"`
 	SpanID        string    `db:"span_id"`
 	ParentSpanID  *string   `db:"parent_span_id"`
@@ -50,10 +52,14 @@ type OTELTrace struct {
 	CreatedAt     time.Time `db:"created_at"`
 }
 
-// ReplayTrace represents a parsed trace in replay-specific schema
+// ReplayTrace represents a parsed LLM call in replay-specific schema.
+// A multi-step agent run produces multiple rows sharing the same trace_id.
 type ReplayTrace struct {
+	ID               int       `db:"id"`
 	TraceID          string    `db:"trace_id"`
+	SpanID           string    `db:"span_id"`
 	RunID            string    `db:"run_id"`
+	StepIndex        int       `db:"step_index"`
 	CreatedAt        time.Time `db:"created_at"`
 	Provider         string    `db:"provider"`
 	Model            string    `db:"model"`
@@ -71,6 +77,7 @@ type ReplayTrace struct {
 type ToolCapture struct {
 	ID        int       `db:"id"`
 	TraceID   string    `db:"trace_id"`
+	SpanID    string    `db:"span_id"`
 	StepIndex int       `db:"step_index"`
 	ToolName  string    `db:"tool_name"`
 	Args      JSONB     `db:"args"`
