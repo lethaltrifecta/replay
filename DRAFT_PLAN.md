@@ -33,13 +33,13 @@ Use a hybrid architecture:
 4. Scenario replay lab: same trace, swap model/prompt/policy/tool availability and explain causality.
 
 ## Adjacent Options in Market
-1. LangSmith: strong production tracing, dataset/experiment management, online evals, and trace comparison workflows for rapid iteration.
-2. Langfuse: strong open observability foundation (OTEL-friendly), prompt/version tracking, and experiment/eval data modeling for analytics-first teams.
-3. Braintrust: strong scorer-based evaluation pipelines, pairwise/model comparisons, and optimization loops for improving prompts and model choices.
-4. Promptfoo: strong adversarial testing and compliance-oriented red-team workflows with configurable attack/eval plugins.
-5. OpenAI eval stack: strong trace grading, agent eval APIs, and prompt optimization workflows tightly integrated with model APIs.
-6. Inspect (UK AISI): strong high-assurance eval architecture with explicit sandboxing, tool control, and agent-task reproducibility focus.
-7. LangGraph time travel: strong checkpointed execution, stateful replay/fork debugging, and failure forensics for graph-based agents.
+1. LangSmith: strong trace-centric product for iterative quality work, including side-by-side trace comparison, experiment-result comparison, and online evaluators for multi-turn threads (including trajectory/tool-call quality), plus OTEL ingestion and collector-proxy options for high-throughput pipelines.
+2. Langfuse: strong open-source observability + eval platform with OTEL-native tracing, sessions/user tracking, agent graph visualization, masking, token/cost tracking, dataset+experiment workflows, managed LLM-as-a-judge and annotation queues, and prompt lifecycle features (version control, playground, labels/environments, A/B testing, link-to-traces).
+3. Braintrust: strong scorer-first evaluation system with custom scorers (code + LLM judge), pass-thresholds, online scoring rules on production logs with sampling/filtering, dataset versioning tied to experiments, playground diff mode (output/score/timing/token comparisons), and immutable experiment snapshots for longitudinal comparisons.
+4. Promptfoo: strong adversarial and policy-centric testing via modular red-team architecture (plugins + strategies + targets), broad plugin coverage across security/safety/compliance categories, custom policy plugins, and workflowized generation/run/report flows for repeatable red-team campaigns.
+5. OpenAI eval stack: strong integrated workflow around traces, datasets, graders, and optimization; includes trace grading for workflow-level failures, agent-eval guidance, configurable grader types (string/text-similarity/model/python), asynchronous eval runs at scale, and dataset-driven prompt optimizer loops.
+6. Inspect (UK AISI): strong high-assurance evaluation framework with explicit scorer/metric abstractions, support for model-graded and rule-based scorers, and a safety-focused sandboxing toolkit (Docker/Kubernetes/VM isolation patterns) designed for agentic evaluations with controlled tool execution environments.
+7. LangGraph time travel: strong durable-execution and debugging primitives via checkpointed state persistence, replay/fork from historical checkpoints, and state mutation before resume to inspect alternative trajectories in long-running agent workflows.
 
 ## Non-Negotiable MVP Requirements
 1. Zero agent SDK changes.
