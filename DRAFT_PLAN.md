@@ -32,6 +32,16 @@ Use a hybrid architecture:
 3. Behavior-first diffing (tool graph + risk class + first divergence), not only output scoring.
 4. Scenario replay lab: same trace, swap model/prompt/policy/tool availability and explain causality.
 
+## Adjacent Options in Market
+1. LangSmith: strong tracing, experiment comparison, and eval workflows.
+2. Langfuse: strong observability + eval/experiment data model.
+3. Braintrust: strong experiment/scorer workflow and gateway offering.
+4. Promptfoo: strong red-team and adversarial evaluation workflows.
+5. OpenAI eval stack: trace grading, agent evals, and prompt optimization.
+6. Inspect (UK AISI): high-assurance eval framework with agent/tool sandbox workflows.
+7. LangGraph time travel: durable execution + replay debugging for agent graphs.
+8. Gateway tools (Helicone/Portkey): strong routing/monitoring/canary workflows.
+
 ## Non-Negotiable MVP Requirements
 1. Zero agent SDK changes.
 2. Deterministic Freeze-Tools replay mode.
