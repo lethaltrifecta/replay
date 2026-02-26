@@ -26,6 +26,12 @@ Use a hybrid architecture:
 1. OTEL for trace discovery and debugging.
 2. Replay store as deterministic source of truth for analysis.
 
+## Why This Is Distinct
+1. Deterministic environment pinning (`freeze-tools`) as a first-class primitive.
+2. Protocol/gateway-native replay for MCP/tool graphs without SDK assumptions.
+3. Behavior-first diffing (tool graph + risk class + first divergence), not only output scoring.
+4. Scenario replay lab: same trace, swap model/prompt/policy/tool availability and explain causality.
+
 ## Non-Negotiable MVP Requirements
 1. Zero agent SDK changes.
 2. Deterministic Freeze-Tools replay mode.
