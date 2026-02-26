@@ -141,13 +141,13 @@ Each scenario defines:
 2. Retention and cleanup.
 3. Documentation and reproducible demo workflows.
 
-## Explicit Non-Goals (MVP)
+## Potential Nice-to-Haves
 1. Full web dashboard.
 2. Minimal repro shrinker.
 3. Full-Freeze mode.
 4. Enterprise multi-region tenancy features.
 
-## Risks and Mitigations
+## Implementation Risks and Mitigations
 1. OTEL-only data gaps.
    - Mitigation: replay store as source of truth.
 2. Sensitive payload handling.
