@@ -1,80 +1,74 @@
 # CMDR Draft Implementation Plan
 
 ## Product Definition
-CMDR is a **replay-backed evaluation and model-diff system** for safe agent model upgrades.
+CMDR is a **replay-backed behavior analysis lab** for LLM agents.
 
-Replay is the deterministic substrate, not the final product.
-
-Primary user value:
-1. Compare candidate models/prompts/policies on real traffic.
-2. Score behavior quality and safety, not just output text.
-3. Gate rollout in CI/CD with explicit pass/fail reasons.
+Replay is the control layer that keeps environment conditions fixed.
+The core product is comparative analysis across models and scenarios.
 
 ## Mission
-Enable safe, auditable, and automated model migration for MCP/agent systems by running baseline vs candidate evaluations over captured runs.
+Help engineers answer:
+1. How does model behavior change across the same task context?
+2. Why do results differ between models or policy/prompt/tool scenarios?
+3. Which scenarios are robust vs brittle?
+
+## Primary Use Cases
+1. Compare model behavior on the same real captured run.
+2. Run scenario experiments:
+   - prompt variants
+   - policy variants
+   - tool availability variants
+   - retrieval context variants
+3. Produce explainable model diffs and evaluation scorecards.
 
 ## Scope Decision
 Use a hybrid architecture:
-1. OTEL for observability, search, and correlation.
-2. Replay store for deterministic re-execution and evaluation-grade data.
-
-Ship this as an **evaluation platform** with three core engines:
-1. Replay engine.
-2. Differential analysis engine.
-3. Evaluation and gating engine.
+1. OTEL for trace discovery and debugging.
+2. Replay store as deterministic source of truth for analysis.
 
 ## Non-Negotiable MVP Requirements
-1. Zero SDK changes for agent applications.
-2. Deterministic Freeze-Tools mode for reliable candidate comparison.
-3. Multi-dimension evaluation per run:
-   - behavior/tool-graph correctness
-   - safety/policy outcomes
-   - response quality (semantic + rubric)
-   - latency and cost
-4. Actionable model diff output:
-   - first divergence step
-   - what changed
-   - severity and rollout impact
-5. CI-first operation:
-   - `json` artifact
-   - `markdown` summary
-   - exit code for gate pass/fail
+1. Zero agent SDK changes.
+2. Deterministic Freeze-Tools replay mode.
+3. Per-run comparison across multiple models/variants.
+4. Multi-dimensional analysis output:
+   - tool-graph behavior
+   - argument and policy deltas
+   - response quality deltas
+   - latency and cost deltas
+5. First-divergence explanation in every diff report.
 6. Runtime overhead target: p95 added latency under 5%.
 
-## Evaluation Dimensions (Core)
-### 1) Behavioral Correctness
-- Tool-call graph drift (order, insertions, missing required calls).
-- Argument drift against normalized and policy-aware constraints.
+## Analysis Dimensions
+### 1) Behavior
+- Tool-call sequence drift.
+- Missing/extra tool calls.
+- Argument drift (normalized JSON diff).
 
-### 2) Safety and Policy
-- New destructive/write calls are high severity.
-- Policy decision regressions (allow/deny/transform deltas).
-- Forbidden-tool or forbidden-data exposure checks.
+### 2) Safety/Policy
+- New risky tool behaviors (`write`, `destructive`).
+- Policy decision changes (`allow`, `deny`, `transform`).
 
-### 3) Output Quality
-- Embedding similarity to baseline response.
-- Optional deterministic rubric judge for workflow-specific expectations.
+### 3) Result Quality
+- Semantic similarity to baseline.
+- Optional rubric score for scenario-specific expectations.
 
 ### 4) Efficiency
-- Latency delta (end-to-end + model latency).
-- Token/cost delta.
+- End-to-end latency delta.
+- Model latency and token/cost deltas.
 
 ## Minimal Gateway Changes
-1. Feature-flagged replay-grade capture sink.
-2. Canonical monotonic `step_index` per run.
-3. Stable run identity fields:
-   - `run_id`
-   - `baseline_run_id`
-   - `trace_id`
-4. Per-run candidate override support for:
-   - model
+1. Feature-flagged replay capture sink.
+2. Canonical monotonic `step_index`.
+3. Stable correlation IDs: `run_id`, `trace_id`, `experiment_id`.
+4. Per-run override support for:
+   - model/provider
    - policy bundle
    - tool endpoint (Replay MCP)
 
 ## Replay Schema (v1)
 ### runs
-- `run_id`, `baseline_run_id`, `trace_id`
-- `tenant_id`, `app_id`, `variant_id`
+- `run_id`, `trace_id`, `experiment_id`
+- `scenario_id`, `variant_id`, `tenant_id`, `app_id`
 - `start_ts`, `end_ts`, `status`
 - `schema_version`
 
@@ -87,7 +81,7 @@ Ship this as an **evaluation platform** with three core engines:
 - `run_id`, `step_index`
 - `provider`, `model`, `params`
 - `request_ref`, `response_ref`
-- token and latency fields
+- token and latency metrics
 
 ### tool_calls
 - `run_id`, `step_index`
@@ -103,69 +97,69 @@ Ship this as an **evaluation platform** with three core engines:
 ## Core Components
 1. Capture sink in gateway.
 2. Replay store (SQLite MVP, pluggable later).
-3. Freeze-Tools mock MCP server (strict mode first).
-4. Replay orchestrator (baseline vs N candidates).
-5. Differential engine (behavior + policy + output + perf).
-6. Evaluation/gate engine (rules, thresholds, severity).
+3. Freeze-Tools replay MCP server.
+4. Experiment orchestrator (baseline + N variants).
+5. Differential analysis engine.
+6. Evaluation score engine.
+7. Reporting layer (JSON + Markdown).
 
 ## CLI Surface (MVP)
-1. `cmdr replay run --baseline <RUN> --variant <SPEC>`
+1. `cmdr experiment run --baseline <RUN> --variant <SPEC>...`
 2. `cmdr diff --baseline <RUN> --candidate <RUN>`
-3. `cmdr eval --baseline <RUN> --candidate <RUN> --workflow <YAML>`
-4. `cmdr gate --baseline <RUN> --candidate <RUN> --workflow <YAML>`
+3. `cmdr eval --baseline <RUN> --candidate <RUN> --scenario <YAML>`
+4. `cmdr report --experiment <ID> --format json,md`
 
-## Gate Policy Defaults
-Hard fail:
-1. Any new `destructive` tool call.
-2. Missing required tool calls for protected workflows.
-3. Unknown tool calls in strict replay mode.
-4. Increased policy-denied actions on protected workflows.
-
-Soft threshold fail (configurable):
-1. Tool sequence similarity below threshold.
-2. Argument drift outside configured limits.
-3. Output quality score below threshold.
-4. Latency/cost budget breach.
+## Scenario Configuration (YAML)
+Each scenario defines:
+1. Dataset or trace selection.
+2. Variant matrix:
+   - model/provider params
+   - prompt bundle
+   - policy bundle
+   - tool constraints
+3. Evaluation weights and thresholds.
+4. Optional hard-fail checks for risky behaviors.
 
 ## Implementation Plan
 ### Phase 1 (Week 1): Capture + Schema
-1. Define schema and storage contract.
-2. Implement sink with async bounded queue and metrics.
+1. Finalize replay schema.
+2. Implement async sink and storage.
 3. Add redaction hooks before persistence.
 
-### Phase 2 (Week 2): Replay Foundation
+### Phase 2 (Week 2): Replay + Experiment Orchestration
 1. Implement Freeze-Tools replay MCP server.
-2. Build replay orchestrator for candidate runs.
+2. Build experiment runner for baseline + variant matrix.
 3. Verify deterministic replays.
 
-### Phase 3 (Week 3): Diff + Eval + Gate
-1. Implement behavior and policy diffing.
-2. Add output-quality and efficiency scoring.
-3. Emit report artifacts and CI exit codes.
+### Phase 3 (Week 3): Diff + Eval + Reports
+1. Implement behavior/policy diffs.
+2. Add quality and efficiency scoring.
+3. Add first-divergence explanations and reports.
 
 ### Phase 4 (Week 4): Hardening
 1. Load/perf validation.
 2. Retention and cleanup.
-3. Rollout documentation and operator playbook.
+3. Documentation and reproducible demo workflows.
 
 ## Explicit Non-Goals (MVP)
-1. Full dashboard UI.
+1. Full web dashboard.
 2. Minimal repro shrinker.
 3. Full-Freeze mode.
-4. Historical policy backtesting.
+4. Enterprise multi-region tenancy features.
 
 ## Risks and Mitigations
-1. Replay data gaps from OTEL-only.
+1. OTEL-only data gaps.
    - Mitigation: replay store as source of truth.
 2. Sensitive payload handling.
-   - Mitigation: redaction profiles + retention TTL.
-3. Capture path pressure.
-   - Mitigation: bounded queue, priority drop strategy, telemetry.
+   - Mitigation: redaction profiles and retention TTL.
+3. Capture backpressure.
+   - Mitigation: bounded queue and prioritized dropping.
 4. Tool nondeterminism.
-   - Mitigation: strict Freeze-Tools mode for migration decisions.
+   - Mitigation: strict Freeze-Tools for experiments.
 
 ## Demo Narrative
-1. Baseline refund workflow is captured once.
-2. Candidate A is cheaper but diverges at step N and fails safety gate.
-3. Candidate B passes behavior + safety thresholds and reduces cost.
-4. CI blocks A and allows B with auditable reports.
+1. Capture one baseline multi-step workflow.
+2. Run the same scenario across 3 models.
+3. Show first divergence for each model with behavior diffs.
+4. Show scorecard: quality, safety, latency, and cost tradeoffs.
+5. Export a report to choose the best model for that scenario.
