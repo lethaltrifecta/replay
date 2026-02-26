@@ -33,14 +33,13 @@ Use a hybrid architecture:
 4. Scenario replay lab: same trace, swap model/prompt/policy/tool availability and explain causality.
 
 ## Adjacent Options in Market
-1. LangSmith: strong tracing, experiment comparison, and eval workflows.
-2. Langfuse: strong observability + eval/experiment data model.
-3. Braintrust: strong experiment/scorer workflow and gateway offering.
-4. Promptfoo: strong red-team and adversarial evaluation workflows.
-5. OpenAI eval stack: trace grading, agent evals, and prompt optimization.
-6. Inspect (UK AISI): high-assurance eval framework with agent/tool sandbox workflows.
-7. LangGraph time travel: durable execution + replay debugging for agent graphs.
-8. Gateway tools (Helicone/Portkey): strong routing/monitoring/canary workflows.
+1. LangSmith: strong production tracing, dataset/experiment management, online evals, and trace comparison workflows for rapid iteration.
+2. Langfuse: strong open observability foundation (OTEL-friendly), prompt/version tracking, and experiment/eval data modeling for analytics-first teams.
+3. Braintrust: strong scorer-based evaluation pipelines, pairwise/model comparisons, and optimization loops for improving prompts and model choices.
+4. Promptfoo: strong adversarial testing and compliance-oriented red-team workflows with configurable attack/eval plugins.
+5. OpenAI eval stack: strong trace grading, agent eval APIs, and prompt optimization workflows tightly integrated with model APIs.
+6. Inspect (UK AISI): strong high-assurance eval architecture with explicit sandboxing, tool control, and agent-task reproducibility focus.
+7. LangGraph time travel: strong checkpointed execution, stateful replay/fork debugging, and failure forensics for graph-based agents.
 
 ## Non-Negotiable MVP Requirements
 1. Zero agent SDK changes.
