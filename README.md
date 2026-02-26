@@ -1,4 +1,4 @@
-# CMDR - Replay-Backed Behavior Analysis Lab
+# CMDR — Comparative Model Deterministic Replay
 
 CMDR is a deterministic replay and evaluation system for comparing LLM agent behavior across models, prompts, policies, and tool configurations.
 
@@ -42,9 +42,9 @@ make run
 ## Documentation
 
 - **[Quick Start Guide](docs/QUICKSTART.md)** - Get started in 5 minutes
-- **[DRAFT_PLAN2.md](DRAFT_PLAN2.md)** - Complete architecture specification
+- **[Architecture Spec](notes/DRAFT_PLAN2.md)** - Complete architecture specification
 - **[Database Layer](docs/DATABASE_LAYER.md)** - Database implementation details
-- **[Implementation Status](IMPLEMENTATION_STATUS.md)** - Current progress and roadmap
+- **[Implementation Status](notes/IMPLEMENTATION_STATUS.md)** - Current progress and roadmap
 
 ## Architecture
 
@@ -57,7 +57,7 @@ CMDR consists of several key components:
 5. **Evaluator** - Multi-strategy evaluation framework
 6. **API/CLI** - REST API and command-line interface
 
-See [DRAFT_PLAN2.md](DRAFT_PLAN2.md) for complete architecture documentation.
+See [notes/DRAFT_PLAN2.md](notes/DRAFT_PLAN2.md) for complete architecture documentation.
 
 ## Usage
 
@@ -190,7 +190,7 @@ See `.env.example` for all configuration options.
 - [ ] Freeze-Tools MCP server
 - [ ] Component integration
 
-See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for detailed progress.
+See [notes/IMPLEMENTATION_STATUS.md](notes/IMPLEMENTATION_STATUS.md) for detailed progress.
 
 ## Contributing
 

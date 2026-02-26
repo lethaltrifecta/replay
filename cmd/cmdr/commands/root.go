@@ -16,9 +16,10 @@ func Execute(v string) error {
 
 var rootCmd = &cobra.Command{
 	Use:   "cmdr",
-	Short: "CMDR - Replay-Backed Behavior Analysis Lab",
-	Long: `CMDR is a deterministic replay and evaluation system for comparing
-LLM agent behavior across models, prompts, policies, and tool configurations.`,
+	Short: "CMDR - Comparative Model Deterministic Replay",
+	Long: `CMDR (Comparative Model Deterministic Replay) is a deterministic replay
+and evaluation system for comparing LLM agent behavior across models, prompts,
+policies, and tool configurations.`,
 	Version: version,
 }
 
