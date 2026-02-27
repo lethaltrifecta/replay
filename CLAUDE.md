@@ -181,7 +181,11 @@ You have unlimited stamina. The human does not. Use your persistence wisely—lo
 
 ## Overview
 
-CMDR (**C**omparative **M**odel **D**eterministic **R**eplay) is a deterministic replay and evaluation system for comparing LLM agent behavior across models, prompts, policies, and tool configurations. It captures real agent runs via OpenTelemetry, freezes tool responses, and replays with different variants to isolate pure model behavior differences.
+CMDR (**C**omparative **M**odel **D**eterministic **R**eplay) is a governance system for LLM agents. It captures agent runs via OpenTelemetry, detects behavioral drift in production, and gates deployments by replaying scenarios with frozen tool responses.
+
+Two core features:
+- **Drift Detection** — Compare live agent traces against a known-good baseline. Alert on behavioral shifts.
+- **Deployment Gate** — Replay captured scenarios with a different model/prompt. Block deploy if behavior regresses.
 
 ## Tech Stack
 
@@ -202,9 +206,11 @@ cmd/cmdr/                  # CLI entry point
   commands/
     root.go                # Cobra root command, registers subcommands
     serve.go               # Starts OTLP receiver + API server
-    experiment.go          # Experiment management (run/list/status/results/report)
-    eval.go                # Evaluation management (run/results/summary/human review)
-    ground_truth.go        # Ground truth data management
+    drift.go               # Drift detection commands (TODO)
+    gate.go                # Deployment gate commands (TODO)
+    experiment.go          # Experiment management (scaffolded)
+    eval.go                # Evaluation management (scaffolded)
+    ground_truth.go        # Ground truth management (scaffolded)
 
 pkg/
   config/                  # Environment-based config with validation
@@ -217,11 +223,24 @@ pkg/
   otelreceiver/
     receiver.go            # OTLP gRPC + HTTP receiver, stores spans
     parser.go              # Extracts LLM data from gen_ai.* OTEL attributes
+  drift/                   # Drift detection engine (TODO)
+  replay/                  # Prompt replay engine (TODO)
+  agwclient/               # agentgateway HTTP client (TODO)
+  diff/                    # Behavior diff engine (TODO)
   utils/logger/            # Zap logger wrapper
 
 test/manual/               # Manual integration test scripts
 scripts/                   # Dev setup, OTLP testing, diagnostics
 ```
+
+## External Dependencies
+
+**freeze-mcp** (separate repo at `../freeze-mcp`):
+- Python MCP server that serves frozen tool responses during replay
+- Reads from CMDR's `tool_captures` table (read-only, shared PostgreSQL)
+- Lookup: `(tool_name, args_hash, trace_id)` — args hash must match CMDR's Go implementation
+- Runs on port 9090, supports per-session trace scoping via `X-Freeze-Trace-ID` header
+- CMDR does not start/stop it — runs as a separate process or container
 
 ## Key Concepts
 
@@ -229,8 +248,12 @@ scripts/                   # Dev setup, OTLP testing, diagnostics
 - **Span**: A single operation (LLM call or tool call) within a trace, identified by `span_id`
 - **ReplayTrace**: Parsed LLM call with model, prompt, completion, tokens, latency
 - **ToolCapture**: Recorded tool call with args, result, args_hash (for freeze-mode lookup)
+- **Baseline**: A trace marked as "known-good" for drift comparison
+- **Fingerprint**: Behavioral signature of a trace (tool patterns, risk distribution, token usage)
+- **Drift Score**: Divergence between a trace's fingerprint and its baseline
+- **Deployment Gate**: Pass/fail verdict from replaying a baseline with a different model
 - **Experiment**: A comparison of 1 baseline + N variant runs
-- **Freeze-Tools**: MCP server that returns pre-captured tool responses during replay
+- **freeze-mcp**: External MCP server that returns pre-captured tool responses during replay
 
 ## Data Model
 
@@ -285,15 +308,16 @@ All config via environment variables with `CMDR_` prefix. See `.env.example`. Re
 
 ## Open Source Integrations
 
-1. **agentgateway** — Proxy for LLM requests. CMDR receives OTEL traces from agentgateway and uses it as the HTTP client for replay requests with different model/prompt configs.
-2. **kagent** — Kubernetes-native AI agent framework. CMDR exposes Freeze-Tools as a kagent `ToolServer` CRD. A kagent `Agent` CRD (model-evaluator) orchestrates experiments.
-3. **agentregistry** — MCP artifact registry. Freeze-Tools registered as a discoverable artifact. Evaluation rubrics published as reusable configs.
+1. **agentgateway** — LLM proxy that emits OTEL traces. CMDR ingests these traces for capture. Also used as the HTTP client for prompt replay with different model configs.
+2. **freeze-mcp** — MCP server (separate repo) that serves frozen tool responses. Reads from CMDR's `tool_captures` table. Critical for deterministic replay.
 
 ## Implementation Status
 
-**Done:** Config, PostgreSQL storage (full CRUD), OTLP receiver (gRPC + HTTP), OTEL span parser, CLI scaffolding, Docker/CI/Makefile.
+**Done:** Config, PostgreSQL storage (full CRUD), OTLP receiver (gRPC + HTTP), OTEL span parser, CLI scaffolding, Docker/CI/Makefile, freeze-mcp (separate repo, fully built).
 
-**Not started:** Freeze-Tools MCP server, replay engine, agentgateway client, behavior diff, evaluation framework, report generation, kagent/agentregistry integration, REST API.
+**In progress:** Drift detection, deployment gate.
+
+**Not started:** `pkg/drift/` (fingerprinting + comparison), `pkg/replay/` (prompt replay engine), `pkg/agwclient/` (agentgateway HTTP client), `pkg/diff/` (behavior diff), drift/gate CLI commands, report generation.
 
 ## Code Conventions
 

@@ -1,207 +1,175 @@
-# CMDR — Comparative Model Deterministic Replay
+# CMDR — Agent Behavior Governance
 
-CMDR is a deterministic replay and evaluation system for comparing LLM agent behavior across models, prompts, policies, and tool configurations.
+**agentgateway gives you observability. CMDR gives you governance.**
 
-## Features
+CMDR (**C**omparative **M**odel **D**eterministic **R**eplay) is a governance system for LLM agents. It captures agent runs via OpenTelemetry, detects behavioral drift in production, and gates deployments by replaying scenarios with frozen tool responses.
 
-- **Deterministic Replay**: Freeze-Tools ensures identical tool execution results across replays
-- **4D Analysis**: Behavior, safety, quality, and efficiency analysis
-- **Comprehensive Evaluation**: Rule-based, LLM-judge, rubric, human-loop, and ground-truth evaluators
-- **Winner Determination**: Automated ranking and recommendation based on configurable criteria
+## The Problem
 
-## Quick Start
+When you change an agent's model, prompt, or policy, how do you know it still behaves correctly? Traditional eval frameworks score outputs after the fact. CMDR catches problems **before deployment** and **during production**:
 
-### One-Command Setup
-
-```bash
-make setup-dev
-```
-
-This sets up your entire local development environment in one command.
-
-For detailed instructions, see **[Quick Start Guide](docs/QUICKSTART.md)**.
-
-### Manual Setup
-
-```bash
-# 1. Create environment config
-cp .env.example .env
-
-# 2. Edit .env and set CMDR_AGENTGATEWAY_URL
-
-# 3. Start development services
-make dev-up
-
-# 4. Download dependencies
-make deps
-
-# 5. Build and run
-make run
-```
-
-## Documentation
-
-- **[Quick Start Guide](docs/QUICKSTART.md)** - Get started in 5 minutes
-- **[Architecture Spec](notes/DRAFT_PLAN2.md)** - Complete architecture specification
-- **[Database Layer](docs/DATABASE_LAYER.md)** - Database implementation details
-- **[Implementation Status](notes/IMPLEMENTATION_STATUS.md)** - Current progress and roadmap
+- **Drift Detection** — Continuously compare live agent behavior against a known-good baseline. Alert when tool call patterns, risk levels, or token usage shift unexpectedly.
+- **Deployment Gate** — Before rolling out a model change, replay captured scenarios with deterministic tool responses. Block the deploy if behavior regresses.
 
 ## Architecture
 
-CMDR consists of several key components:
+```
+                    ┌─────────────────┐
+                    │  agentgateway   │  ← LLM proxy, emits OTEL traces
+                    └────────┬────────┘
+                             │ OTLP (gRPC/HTTP)
+                             ▼
+┌──────────────────────────────────────────────┐
+│                    CMDR                       │
+│                                              │
+│  ┌──────────┐  ┌───────────┐  ┌───────────┐ │
+│  │  OTLP    │  │  Drift    │  │ Deployment│ │
+│  │ Receiver │  │ Detection │  │   Gate    │ │
+│  └────┬─────┘  └─────┬─────┘  └─────┬─────┘ │
+│       │              │              │        │
+│       ▼              ▼              ▼        │
+│  ┌──────────────────────────────────────┐    │
+│  │          PostgreSQL Storage          │    │
+│  └──────────────────────────────────────┘    │
+│                      ▲                       │
+└──────────────────────┼───────────────────────┘
+                       │ (read-only)
+              ┌────────┴────────┐
+              │   freeze-mcp   │  ← MCP server returning frozen tool responses
+              └────────────────┘
+```
 
-1. **OTLP Receiver** - Ingests OTEL traces from agentgateway
-2. **Freeze-Tools** - Deterministic MCP server for replay
-3. **Replay Engine** - Orchestrates experiment execution
-4. **Analyzer** - 4D comparative analysis (behavior, safety, quality, efficiency)
-5. **Evaluator** - Multi-strategy evaluation framework
-6. **API/CLI** - REST API and command-line interface
+**freeze-mcp** is a separate service (Python) that reads from CMDR's `tool_captures` table and serves frozen tool responses via the MCP protocol during replay. It runs as a sidecar alongside CMDR.
 
-See [notes/DRAFT_PLAN2.md](notes/DRAFT_PLAN2.md) for complete architecture documentation.
+## Quick Start
+
+```bash
+# Set up local dev environment
+make setup-dev
+
+# Start services (PostgreSQL + Jaeger)
+make dev-up
+
+# Build and run CMDR
+make run
+```
+
+CMDR starts listening for OTLP traces on ports 4317 (gRPC) and 4318 (HTTP). Point agentgateway's OTLP exporter at CMDR to start capturing agent runs.
+
+For detailed setup, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 ## Usage
 
-### Create an Experiment
+### Capture Agent Runs
+
+CMDR automatically captures and parses OTEL traces from agentgateway. Every LLM call and tool call is stored with model, prompts, completions, tokens, tool args, and risk classification.
+
+### Detect Drift
 
 ```bash
-# Using CLI
-cmdr experiment run \
-  --baseline-trace abc123 \
-  --variants variants.yaml
+# Mark a known-good trace as baseline
+cmdr drift baseline set <trace_id>
 
-# Using API
-curl -X POST http://localhost:8080/api/v1/experiments \
-  -H "Content-Type: application/json" \
-  -d '{
-    "baseline_trace_id": "abc123",
-    "variants": [
-      {"name": "claude", "model": "claude-3-5-sonnet-20241022"},
-      {"name": "gpt4", "model": "gpt-4"}
-    ]
-  }'
+# Check if a new trace has drifted from baseline
+cmdr drift check --trace-id <trace_id>
+
+# Watch for drift continuously
+cmdr drift watch
 ```
 
-### Get Results
+### Gate Deployments
 
 ```bash
-# Get experiment status
-cmdr experiment status exp-789
+# Replay a baseline trace with a different model
+cmdr gate check \
+  --baseline <trace_id> \
+  --model gpt-4o-mini \
+  --threshold 0.8
 
-# Get evaluation summary with winner
-cmdr eval summary exp-789
-
-# Get detailed report
-cmdr experiment report exp-789 --output report.md
+# Exit code 0 = pass, 1 = fail (CI/CD friendly)
 ```
 
 ## Development
 
-### Available Commands
-
 ```bash
-make help                 # Show all available commands
-
-# Development
-make setup-dev           # Set up local development environment
-make dev-up              # Start PostgreSQL and Jaeger
-make dev-down            # Stop services
-make dev-reset           # Reset database
-
-# Build & Run
-make build               # Build binary
-make run                 # Build and run service
-
-# Testing
-make test                # Run unit tests
-make test-storage        # Run storage tests with real PostgreSQL
-make coverage            # Generate coverage report
-
-# Code Quality
-make lint                # Run linter
-make fmt                 # Format code
+make setup-dev       # One-command dev setup
+make dev-up          # Start PostgreSQL + Jaeger
+make dev-down        # Stop services
+make dev-reset       # Wipe and restart database
+make build           # Build binary to bin/cmdr
+make run             # Build + run with .env
+make test            # Unit tests with race detection
+make test-storage    # Integration tests (needs PostgreSQL)
+make lint            # golangci-lint
+make fmt             # gofmt
 ```
 
-### Running Tests
-
-```bash
-# All tests
-make test
-
-# Storage tests (requires PostgreSQL)
-make dev-up
-make test-storage
-
-# Generate coverage report
-make coverage
-open coverage.html
-```
-
-### Project Structure
+## Project Structure
 
 ```
-.
-├── cmd/
-│   └── cmdr/              # CLI entry point
-├── pkg/
-│   ├── config/            # Configuration ✅
-│   ├── storage/           # Database layer ✅
-│   ├── otelreceiver/      # OTLP trace ingestion (TODO)
-│   ├── freezetools/       # Deterministic replay (TODO)
-│   ├── replayengine/      # Experiment orchestration (TODO)
-│   ├── analyzer/          # 4D analysis (TODO)
-│   ├── evaluator/         # Evaluation framework (TODO)
-│   └── api/               # REST API (TODO)
-├── test/
-│   ├── integration/       # Integration tests
-│   └── e2e/               # End-to-end tests
-├── docs/                  # Documentation
-├── scripts/               # Utility scripts
-└── deployments/           # Docker and K8s configs
+cmd/cmdr/                  # CLI entry point
+  commands/
+    root.go                # Cobra root, registers subcommands
+    serve.go               # OTLP receiver + server startup
+    drift.go               # Drift detection commands (TODO)
+    gate.go                # Deployment gate commands (TODO)
+
+pkg/
+  config/                  # Environment-based config
+  storage/                 # PostgreSQL storage layer (12 tables)
+  otelreceiver/            # OTLP gRPC + HTTP receiver, span parser
+  drift/                   # Drift detection engine (TODO)
+  replay/                  # Prompt replay engine (TODO)
+  agwclient/               # agentgateway HTTP client (TODO)
+  diff/                    # Behavior diff engine (TODO)
+  utils/logger/            # Zap logger wrapper
 ```
 
 ## Configuration
 
-Configuration is managed via environment variables. Copy `.env.example` to `.env` and adjust:
+All config via environment variables with `CMDR_` prefix. See `.env.example`.
 
-```bash
-# Key settings
-CMDR_API_PORT=8080
-CMDR_POSTGRES_URL=postgres://user:pass@localhost:5432/cmdr
-CMDR_AGENTGATEWAY_URL=http://your-agentgateway:port
-CMDR_OTLP_GRPC_ENDPOINT=0.0.0.0:4317
-CMDR_OTLP_HTTP_ENDPOINT=0.0.0.0:4318
-```
+| Variable | Required | Description |
+|---|---|---|
+| `CMDR_POSTGRES_URL` | Yes | PostgreSQL connection string |
+| `CMDR_AGENTGATEWAY_URL` | Yes | agentgateway endpoint |
+| `CMDR_OTLP_GRPC_ENDPOINT` | No | OTLP gRPC listen address (default: `0.0.0.0:4317`) |
+| `CMDR_OTLP_HTTP_ENDPOINT` | No | OTLP HTTP listen address (default: `0.0.0.0:4318`) |
 
-See `.env.example` for all configuration options.
+## Ports
+
+| Port | Service |
+|------|---------|
+| 4317 | OTLP gRPC receiver |
+| 4318 | OTLP HTTP receiver |
+| 8080 | HTTP API (planned) |
+| 9090 | freeze-mcp (separate service) |
 
 ## Current Status
 
-✅ **Phase 1 Foundation - COMPLETE**
-- [x] Project structure and build system
-- [x] Configuration management
-- [x] Structured logging
-- [x] CLI framework (Cobra)
-- [x] Database layer (PostgreSQL with 12 tables)
-- [x] Migration system
-- [x] Comprehensive test suite
+| Component | Status |
+|---|---|
+| Config, logging, CLI scaffolding | Done |
+| PostgreSQL storage (12 tables, migrations, full CRUD) | Done |
+| OTLP receiver (gRPC + HTTP, parser, tool extraction) | Done |
+| freeze-mcp (MCP server, frozen tool responses) | Done (separate repo) |
+| Drift detection | Not started |
+| Deployment gate (prompt replay) | Not started |
+| agentgateway client | Not started |
+| Behavior diff engine | Not started |
 
-🚧 **Phase 1 Core Components - IN PROGRESS**
-- [ ] OTLP receiver
-- [ ] Freeze-Tools MCP server
-- [ ] Component integration
+## Hackathon
 
-See [notes/IMPLEMENTATION_STATUS.md](notes/IMPLEMENTATION_STATUS.md) for detailed progress.
+Built for [MCP_HACK//26](https://aihackathon.dev) in the **Secure & Govern MCP** category, using [agentgateway](https://github.com/agentgateway/agentgateway) as the core integration point.
 
-## Contributing
+## Documentation
 
-Contributions welcome! Please read CONTRIBUTING.md first.
+- [Quick Start Guide](docs/QUICKSTART.md)
+- [Database Layer](docs/DATABASE_LAYER.md)
+- [OTLP Receiver](docs/OTLP_RECEIVER.md)
+- [Testing OTLP](docs/TESTING_OTLP.md)
+- [Architecture Spec](notes/DRAFT_PLAN2.md)
 
 ## License
 
 MIT License - See LICENSE file for details
-
-## Links
-
-- **Repository**: https://github.com/lethaltrifecta/replay
-- **Documentation**: [docs/](docs/)
-- **Issues**: https://github.com/lethaltrifecta/replay/issues
