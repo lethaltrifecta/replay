@@ -55,11 +55,14 @@ func TestLoad(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "missing required agentgateway url",
+			name: "valid config without agentgateway url",
 			envVars: map[string]string{
 				"CMDR_POSTGRES_URL": "postgres://localhost:5432/cmdr",
 			},
-			wantErr: true,
+			wantErr: false,
+			check: func(t *testing.T, cfg *Config) {
+				assert.Equal(t, "", cfg.AgentgatewayURL)
+			},
 		},
 	}
 
@@ -172,4 +175,27 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRequireAgentgateway(t *testing.T) {
+	t.Run("missing agentgateway url", func(t *testing.T) {
+		cfg := Config{
+			APIPort:              8080,
+			PostgresURL:          "postgres://localhost:5432/cmdr",
+			AgentgatewayURL:     "",
+			WorkerPoolSize:       10,
+			MaxConcurrentReplays: 5,
+		}
+		err := cfg.RequireAgentgateway()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "AGENTGATEWAY_URL is required")
+	})
+
+	t.Run("valid agentgateway url", func(t *testing.T) {
+		cfg := Config{
+			AgentgatewayURL: "http://localhost:8080",
+		}
+		err := cfg.RequireAgentgateway()
+		require.NoError(t, err)
+	})
 }

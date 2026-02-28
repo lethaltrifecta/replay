@@ -75,6 +75,18 @@ type Storage interface {
 	// Evaluation Summary
 	CreateEvaluationSummary(ctx context.Context, summary *EvaluationSummary) error
 	GetEvaluationSummary(ctx context.Context, experimentID uuid.UUID) ([]*EvaluationSummary, error)
+
+	// Baselines
+	MarkTraceAsBaseline(ctx context.Context, baseline *Baseline) error
+	GetBaseline(ctx context.Context, traceID string) (*Baseline, error)
+	ListBaselines(ctx context.Context) ([]*Baseline, error)
+	UnmarkBaseline(ctx context.Context, traceID string) error
+
+	// Drift Results
+	CreateDriftResult(ctx context.Context, result *DriftResult) error
+	GetDriftResults(ctx context.Context, traceID string) ([]*DriftResult, error)
+	GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string) ([]*DriftResult, error)
+	GetLatestDriftResult(ctx context.Context, traceID string) (*DriftResult, error)
 }
 
 // TraceFilters for filtering trace queries

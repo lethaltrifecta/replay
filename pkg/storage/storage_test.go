@@ -36,6 +36,8 @@ func teardownTestDB(t *testing.T, storage *PostgresStorage) {
 
 	// Clean up all tables
 	tables := []string{
+		"drift_results",
+		"baselines",
 		"evaluation_summary",
 		"ground_truth",
 		"human_evaluation_queue",
@@ -205,7 +207,7 @@ func TestPostgresStorage_Experiments(t *testing.T) {
 		CreatedAt:       time.Now(),
 	}
 
-	err = storage.CreateExperiment(ctx, exp)
+	err := storage.CreateExperiment(ctx, exp)
 	require.NoError(t, err)
 
 	// Get the experiment

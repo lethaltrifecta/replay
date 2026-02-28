@@ -78,6 +78,14 @@ func (m *mockStorage) ListGroundTruth(ctx context.Context, taskType *string) ([]
 func (m *mockStorage) DeleteGroundTruth(ctx context.Context, taskID string) error                         { return nil }
 func (m *mockStorage) CreateEvaluationSummary(ctx context.Context, summary *storage.EvaluationSummary) error { return nil }
 func (m *mockStorage) GetEvaluationSummary(ctx context.Context, experimentID uuid.UUID) ([]*storage.EvaluationSummary, error) { return nil, nil }
+func (m *mockStorage) MarkTraceAsBaseline(ctx context.Context, baseline *storage.Baseline) error   { return nil }
+func (m *mockStorage) GetBaseline(ctx context.Context, traceID string) (*storage.Baseline, error)  { return nil, nil }
+func (m *mockStorage) ListBaselines(ctx context.Context) ([]*storage.Baseline, error)              { return nil, nil }
+func (m *mockStorage) UnmarkBaseline(ctx context.Context, traceID string) error                    { return nil }
+func (m *mockStorage) CreateDriftResult(ctx context.Context, result *storage.DriftResult) error     { return nil }
+func (m *mockStorage) GetDriftResults(ctx context.Context, traceID string) ([]*storage.DriftResult, error) { return nil, nil }
+func (m *mockStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string) ([]*storage.DriftResult, error) { return nil, nil }
+func (m *mockStorage) GetLatestDriftResult(ctx context.Context, traceID string) (*storage.DriftResult, error) { return nil, nil }
 
 func TestParser_IsLLMSpan(t *testing.T) {
 	log, _ := logger.New("debug")
