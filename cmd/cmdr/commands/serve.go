@@ -41,7 +41,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	log.Info("Starting CMDR service",
 		"version", version,
