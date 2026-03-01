@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lethaltrifecta/replay/pkg/config"
+	"github.com/lethaltrifecta/replay/pkg/drift"
 	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
@@ -43,14 +44,25 @@ var driftBaselineRemoveCmd = &cobra.Command{
 	RunE:  runDriftBaselineRemove,
 }
 
+var driftCheckCmd = &cobra.Command{
+	Use:   "check <trace-id>",
+	Short: "Compare a trace against a baseline for drift",
+	Long:  `Extracts behavioral fingerprints from both traces and computes a drift score.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  runDriftCheck,
+}
+
 func init() {
 	driftCmd.AddCommand(driftBaselineCmd)
+	driftCmd.AddCommand(driftCheckCmd)
 	driftBaselineCmd.AddCommand(driftBaselineSetCmd)
 	driftBaselineCmd.AddCommand(driftBaselineListCmd)
 	driftBaselineCmd.AddCommand(driftBaselineRemoveCmd)
 
 	driftBaselineSetCmd.Flags().String("name", "", "Human-readable name for the baseline")
 	driftBaselineSetCmd.Flags().String("description", "", "Description of the baseline")
+
+	driftCheckCmd.Flags().String("baseline", "", "Baseline trace ID to compare against (defaults to most recent)")
 }
 
 func connectDB() (*storage.PostgresStorage, error) {
@@ -168,4 +180,129 @@ func runDriftBaselineRemove(cmd *cobra.Command, args []string) error {
 
 	cmd.Printf("Baseline removed for trace %s\n", traceID)
 	return nil
+}
+
+func runDriftCheck(cmd *cobra.Command, args []string) error {
+	candidateTraceID := args[0]
+
+	store, err := connectDB()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	// Resolve baseline trace ID
+	baselineFlag, _ := cmd.Flags().GetString("baseline")
+	var baselineTraceID string
+
+	if baselineFlag != "" {
+		// Verify the explicit baseline exists
+		_, err := store.GetBaseline(ctx, baselineFlag)
+		if err != nil {
+			return fmt.Errorf("baseline %q not found: %w", baselineFlag, err)
+		}
+		baselineTraceID = baselineFlag
+	} else {
+		// Auto-detect: use the most recently created baseline
+		baselines, err := store.ListBaselines(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list baselines: %w", err)
+		}
+		if len(baselines) == 0 {
+			return fmt.Errorf("no baselines found; set one with: cmdr drift baseline set <trace-id>")
+		}
+		// ListBaselines returns ordered by created_at DESC, so first is most recent
+		baselineTraceID = baselines[0].TraceID
+	}
+
+	// Fetch data for both traces
+	baselineSpans, err := store.GetReplayTraceSpans(ctx, baselineTraceID)
+	if err != nil {
+		return fmt.Errorf("failed to get baseline spans: %w", err)
+	}
+	if len(baselineSpans) == 0 {
+		return fmt.Errorf("no replay spans found for baseline trace %s", baselineTraceID)
+	}
+
+	baselineTools, err := store.GetToolCapturesByTrace(ctx, baselineTraceID)
+	if err != nil {
+		return fmt.Errorf("failed to get baseline tool captures: %w", err)
+	}
+
+	candidateSpans, err := store.GetReplayTraceSpans(ctx, candidateTraceID)
+	if err != nil {
+		return fmt.Errorf("failed to get candidate spans: %w", err)
+	}
+	if len(candidateSpans) == 0 {
+		return fmt.Errorf("no replay spans found for candidate trace %s", candidateTraceID)
+	}
+
+	candidateTools, err := store.GetToolCapturesByTrace(ctx, candidateTraceID)
+	if err != nil {
+		return fmt.Errorf("failed to get candidate tool captures: %w", err)
+	}
+
+	// Extract fingerprints and compare
+	baselineFP, err := drift.Extract(baselineTraceID, baselineSpans, baselineTools)
+	if err != nil {
+		return fmt.Errorf("failed to extract baseline fingerprint: %w", err)
+	}
+
+	candidateFP, err := drift.Extract(candidateTraceID, candidateSpans, candidateTools)
+	if err != nil {
+		return fmt.Errorf("failed to extract candidate fingerprint: %w", err)
+	}
+
+	cfg := drift.DefaultConfig()
+	report := drift.Compare(baselineFP, candidateFP, cfg)
+
+	// Persist result
+	result := &storage.DriftResult{
+		TraceID:         candidateTraceID,
+		BaselineTraceID: baselineTraceID,
+		DriftScore:      report.Score,
+		Verdict:         report.Verdict,
+		Details:         storage.JSONB(report.Details),
+	}
+	if err := store.CreateDriftResult(ctx, result); err != nil {
+		return fmt.Errorf("failed to store drift result: %w", err)
+	}
+
+	// Print summary
+	cmd.Println("Drift Check Result")
+	cmd.Println("==================")
+	cmd.Printf("Trace:    %s\n", candidateTraceID)
+	cmd.Printf("Baseline: %s\n", baselineTraceID)
+	cmd.Printf("Score:    %.3f\n", report.Score)
+	cmd.Printf("Verdict:  %s\n\n", verdictDisplay(report.Verdict))
+
+	cmd.Println("Dimension Breakdown:")
+	cmd.Printf("  Tool Order:     %.3f\n", report.Details["tool_order_score"])
+	cmd.Printf("  Tool Frequency: %.3f\n", report.Details["tool_frequency_score"])
+	cmd.Printf("  Risk Shift:     %.3f\n", report.Details["risk_shift_score"])
+	cmd.Printf("  Token Delta:    %.3f\n", report.Details["token_delta_score"])
+
+	if modelChanged, ok := report.Details["model_changed"].(bool); ok && modelChanged {
+		cmd.Println("\n  WARNING: Model changed between baseline and candidate")
+	}
+	if providerChanged, ok := report.Details["provider_changed"].(bool); ok && providerChanged {
+		cmd.Println("  WARNING: Provider changed between baseline and candidate")
+	}
+
+	return nil
+}
+
+func verdictDisplay(verdict string) string {
+	switch verdict {
+	case storage.DriftVerdictPass:
+		return "PASS"
+	case storage.DriftVerdictWarn:
+		return "WARN"
+	case storage.DriftVerdictFail:
+		return "FAIL"
+	default:
+		return verdict
+	}
 }

@@ -290,7 +290,7 @@ func (s *PostgresStorage) GetToolCapturesByTrace(ctx context.Context, traceID st
 		       latency_ms, risk_class, created_at
 		FROM tool_captures
 		WHERE trace_id = $1
-		ORDER BY step_index ASC
+		ORDER BY step_index ASC, created_at ASC, id ASC
 	`
 
 	rows, err := s.db.QueryContext(ctx, query, traceID)
