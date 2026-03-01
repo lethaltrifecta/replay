@@ -204,6 +204,34 @@ type EvaluationSummary struct {
 	CreatedAt       time.Time `db:"created_at"`
 }
 
+// Baseline represents a trace marked as known-good for drift comparison
+type Baseline struct {
+	ID          int       `db:"id"`
+	TraceID     string    `db:"trace_id"`
+	Name        *string   `db:"name"`
+	Description *string   `db:"description"`
+	CreatedAt   time.Time `db:"created_at"`
+}
+
+// DriftResult represents the outcome of comparing a trace against a baseline
+type DriftResult struct {
+	ID              int       `db:"id"`
+	TraceID         string    `db:"trace_id"`
+	BaselineTraceID string    `db:"baseline_trace_id"`
+	DriftScore      float64   `db:"drift_score"`
+	Verdict         string    `db:"verdict"`
+	Details         JSONB     `db:"details"`
+	CreatedAt       time.Time `db:"created_at"`
+}
+
+// Drift verdict constants
+const (
+	DriftVerdictPass    = "pass"
+	DriftVerdictWarn    = "warn"
+	DriftVerdictFail    = "fail"
+	DriftVerdictPending = "pending"
+)
+
 // Status constants
 const (
 	// Experiment/Run status

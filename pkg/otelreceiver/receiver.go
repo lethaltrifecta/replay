@@ -107,7 +107,7 @@ func (r *Receiver) startHTTP(endpoint string) error {
 	mux.HandleFunc("/v1/traces", r.handleHTTPTraces)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	r.httpServer = &http.Server{
@@ -174,7 +174,7 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("{}"))
+	_, _ = w.Write([]byte("{}"))
 }
 
 // processTraces processes incoming traces and stores them

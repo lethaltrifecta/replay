@@ -64,13 +64,13 @@ func init() {
 	groundTruthAddCmd.Flags().String("task-type", "", "Task type")
 	groundTruthAddCmd.Flags().String("input", "", "Path to input JSON file")
 	groundTruthAddCmd.Flags().String("expected-output", "", "Path to expected output file")
-	groundTruthAddCmd.MarkFlagRequired("task-id")
-	groundTruthAddCmd.MarkFlagRequired("expected-output")
+	_ = groundTruthAddCmd.MarkFlagRequired("task-id")
+	_ = groundTruthAddCmd.MarkFlagRequired("expected-output")
 
 	// Flags for list
 	groundTruthListCmd.Flags().String("task-type", "", "Filter by task type")
 
 	// Flags for update
 	groundTruthUpdateCmd.Flags().String("expected-output", "", "Path to new expected output file")
-	groundTruthUpdateCmd.MarkFlagRequired("expected-output")
+	_ = groundTruthUpdateCmd.MarkFlagRequired("expected-output")
 }

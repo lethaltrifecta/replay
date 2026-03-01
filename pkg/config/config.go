@@ -22,7 +22,7 @@ type Config struct {
 	TempoURL  string `envconfig:"TEMPO_URL"`
 
 	// Agentgateway Client configuration
-	AgentgatewayURL     string        `envconfig:"AGENTGATEWAY_URL" required:"true"`
+	AgentgatewayURL     string        `envconfig:"AGENTGATEWAY_URL"`
 	AgentgatewayTimeout time.Duration `envconfig:"AGENTGATEWAY_TIMEOUT" default:"60s"`
 	AgentgatewayRetries int           `envconfig:"AGENTGATEWAY_RETRY_ATTEMPTS" default:"3"`
 
@@ -70,10 +70,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("POSTGRES_URL is required")
 	}
 
-	if c.AgentgatewayURL == "" {
-		return fmt.Errorf("AGENTGATEWAY_URL is required")
-	}
-
 	if c.WorkerPoolSize < 1 {
 		return fmt.Errorf("WORKER_POOL_SIZE must be at least 1")
 	}
@@ -82,5 +78,15 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("MAX_CONCURRENT_REPLAYS must be at least 1")
 	}
 
+	return nil
+}
+
+// RequireAgentgateway checks that agentgateway configuration is present.
+// Call after Load() for commands that need agentgateway (serve, replay).
+// Load() already calls Validate() for base config; this adds the agentgateway check.
+func (c *Config) RequireAgentgateway() error {
+	if c.AgentgatewayURL == "" {
+		return fmt.Errorf("CMDR_AGENTGATEWAY_URL is required for this command")
+	}
 	return nil
 }

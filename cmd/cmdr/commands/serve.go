@@ -32,12 +32,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
+	if err := cfg.RequireAgentgateway(); err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
+	}
+
 	// Initialize logger
 	log, err := logger.New(cfg.LogLevel)
 	if err != nil {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	log.Info("Starting CMDR service",
 		"version", version,

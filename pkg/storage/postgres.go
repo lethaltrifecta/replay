@@ -63,7 +63,18 @@ func (s *PostgresStorage) Migrate(ctx context.Context) error {
 	// Execute migration
 	_, err = s.db.ExecContext(ctx, string(migrationSQL))
 	if err != nil {
-		return fmt.Errorf("failed to execute migration: %w", err)
+		return fmt.Errorf("failed to execute migration 001: %w", err)
+	}
+
+	// Read and execute baselines + drift migration
+	migrationSQL2, err := migrationsFS.ReadFile("migrations/002_baselines_and_drift.sql")
+	if err != nil {
+		return fmt.Errorf("failed to read migration file 002: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, string(migrationSQL2))
+	if err != nil {
+		return fmt.Errorf("failed to execute migration 002: %w", err)
 	}
 
 	return nil

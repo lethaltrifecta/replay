@@ -29,4 +29,5 @@ func init() {
 	rootCmd.AddCommand(experimentCmd)
 	rootCmd.AddCommand(evalCmd)
 	rootCmd.AddCommand(groundTruthCmd)
+	rootCmd.AddCommand(driftCmd)
 }
