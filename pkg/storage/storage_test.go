@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -14,17 +15,17 @@ import (
 func getTestPostgresURL() string {
 	url := os.Getenv("CMDR_POSTGRES_URL")
 	if url == "" {
-		url = "postgres://cmdr:cmdr@localhost:5432/cmdr_test?sslmode=disable"
+		url = "postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr_test?sslmode=disable"
 	}
 	return url
 }
 
 func setupTestDB(t *testing.T) *PostgresStorage {
-	storage, err := NewPostgresStorage(getTestPostgresURL(), 10)
+	ctx := context.Background()
+	storage, err := NewPostgresStorage(ctx, getTestPostgresURL(), 10)
 	require.NoError(t, err)
 
 	// Run migrations
-	ctx := context.Background()
 	err = storage.Migrate(ctx)
 	require.NoError(t, err)
 
@@ -53,7 +54,7 @@ func teardownTestDB(t *testing.T, storage *PostgresStorage) {
 	}
 
 	for _, table := range tables {
-		_, err := storage.db.ExecContext(ctx, "TRUNCATE TABLE "+table+" CASCADE")
+		_, err := storage.pool.Exec(ctx, "TRUNCATE TABLE "+table+" CASCADE")
 		if err != nil {
 			t.Logf("Warning: failed to truncate %s: %v", table, err)
 		}
@@ -351,4 +352,113 @@ func TestPostgresStorage_GroundTruth(t *testing.T) {
 	// Verify deletion
 	_, err = storage.GetGroundTruth(ctx, "task-123")
 	assert.Error(t, err)
+}
+
+func TestPostgresStorage_CreateIngestionBatch(t *testing.T) {
+	storage := setupTestDB(t)
+	defer teardownTestDB(t, storage)
+
+	ctx := context.Background()
+
+	t.Run("all three table types", func(t *testing.T) {
+		otels := make([]*OTELTrace, 100)
+		for i := 0; i < 100; i++ {
+			otels[i] = &OTELTrace{
+				TraceID:     fmt.Sprintf("batch-otel-trace-%d", i),
+				SpanID:      fmt.Sprintf("batch-otel-span-%d", i),
+				ServiceName: "test-service",
+				SpanKind:    "internal",
+				StartTime:   time.Now(),
+				EndTime:     time.Now(),
+				Attributes:  JSONB{"index": i},
+				CreatedAt:   time.Now(),
+			}
+		}
+
+		replays := make([]*ReplayTrace, 50)
+		for i := 0; i < 50; i++ {
+			replays[i] = &ReplayTrace{
+				TraceID:          fmt.Sprintf("batch-replay-trace-%d", i),
+				SpanID:           fmt.Sprintf("batch-replay-span-%d", i),
+				RunID:            fmt.Sprintf("batch-replay-trace-%d", i),
+				StepIndex:        0,
+				CreatedAt:        time.Now(),
+				Provider:         "anthropic",
+				Model:            "claude-3-5-sonnet",
+				Prompt:           JSONB{"messages": []interface{}{}},
+				Completion:       "test completion",
+				PromptTokens:     10,
+				CompletionTokens: 5,
+				TotalTokens:      15,
+				LatencyMS:        100,
+			}
+		}
+
+		captures := make([]*ToolCapture, 25)
+		for i := 0; i < 25; i++ {
+			captures[i] = &ToolCapture{
+				TraceID:   fmt.Sprintf("batch-tool-trace-%d", i),
+				SpanID:    fmt.Sprintf("batch-tool-span-%d", i),
+				StepIndex: 0,
+				ToolName:  "search",
+				Args:      JSONB{"query": fmt.Sprintf("query-%d", i)},
+				ArgsHash:  fmt.Sprintf("hash-%d", i),
+				Result:    JSONB{"results": []string{}},
+				LatencyMS: 50,
+				RiskClass: RiskClassRead,
+				CreatedAt: time.Now(),
+			}
+		}
+
+		counts, err := storage.CreateIngestionBatch(ctx, otels, replays, captures)
+		require.NoError(t, err)
+		assert.Equal(t, int64(100), counts.OTELTraces)
+		assert.Equal(t, int64(50), counts.ReplayTraces)
+		assert.Equal(t, int64(25), counts.ToolCaptures)
+
+		// Verify each table
+		spans, err := storage.GetOTELTraceSpans(ctx, "batch-otel-trace-0")
+		require.NoError(t, err)
+		assert.Len(t, spans, 1)
+
+		replaySpans, err := storage.GetReplayTraceSpans(ctx, "batch-replay-trace-0")
+		require.NoError(t, err)
+		assert.Len(t, replaySpans, 1)
+		assert.Equal(t, "anthropic", replaySpans[0].Provider)
+
+		retrieved, err := storage.GetToolCaptureByArgs(ctx, "search", "hash-0")
+		require.NoError(t, err)
+		assert.Equal(t, "search", retrieved.ToolName)
+	})
+
+	t.Run("empty slices", func(t *testing.T) {
+		counts, err := storage.CreateIngestionBatch(ctx, []*OTELTrace{}, []*ReplayTrace{}, []*ToolCapture{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), counts.OTELTraces)
+		assert.Equal(t, int64(0), counts.ReplayTraces)
+		assert.Equal(t, int64(0), counts.ToolCaptures)
+	})
+
+	t.Run("idempotent", func(t *testing.T) {
+		otels := []*OTELTrace{
+			{
+				TraceID:     "idempotent-trace",
+				SpanID:      "idempotent-span",
+				ServiceName: "test",
+				SpanKind:    "internal",
+				StartTime:   time.Now(),
+				EndTime:     time.Now(),
+				CreatedAt:   time.Now(),
+			},
+		}
+
+		counts1, err := storage.CreateIngestionBatch(ctx, otels, nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), counts1.OTELTraces)
+
+		// Second insert should succeed with 0 rows affected (conflict)
+		counts2, err := storage.CreateIngestionBatch(ctx, otels, nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), counts2.OTELTraces)
+	})
 }

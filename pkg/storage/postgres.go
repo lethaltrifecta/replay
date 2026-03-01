@@ -2,13 +2,15 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 //go:embed migrations/*.sql
@@ -16,52 +18,54 @@ var migrationsFS embed.FS
 
 // PostgresStorage implements Storage interface using PostgreSQL
 type PostgresStorage struct {
-	db *sql.DB
+	pool *pgxpool.Pool
 }
 
 // NewPostgresStorage creates a new PostgreSQL storage instance
-func NewPostgresStorage(connectionURL string, maxConns int) (*PostgresStorage, error) {
-	db, err := sql.Open("postgres", connectionURL)
+func NewPostgresStorage(ctx context.Context, connectionURL string, maxConns int) (*PostgresStorage, error) {
+	config, err := pgxpool.ParseConfig(connectionURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to parse connection URL: %w", err)
 	}
 
-	// Configure connection pool
-	db.SetMaxOpenConns(maxConns)
-	db.SetMaxIdleConns(maxConns / 4)
-	db.SetConnMaxLifetime(time.Hour)
+	config.MaxConns = int32(maxConns)
+	config.MinConns = int32(maxConns / 4)
+	config.MaxConnLifetime = time.Hour
+	config.MaxConnIdleTime = 30 * time.Minute
 
-	// Ping to verify connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create connection pool: %w", err)
+	}
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	return &PostgresStorage{db: db}, nil
+	return &PostgresStorage{pool: pool}, nil
 }
 
-// Close closes the database connection
+// Close closes the database connection pool
 func (s *PostgresStorage) Close() error {
-	return s.db.Close()
+	s.pool.Close()
+	return nil
 }
 
 // Ping verifies the database connection
 func (s *PostgresStorage) Ping(ctx context.Context) error {
-	return s.db.PingContext(ctx)
+	return s.pool.Ping(ctx)
 }
 
 // Migrate runs database migrations
 func (s *PostgresStorage) Migrate(ctx context.Context) error {
-	// Read migration file
+	// Read and execute first migration
 	migrationSQL, err := migrationsFS.ReadFile("migrations/001_initial_schema.sql")
 	if err != nil {
 		return fmt.Errorf("failed to read migration file: %w", err)
 	}
 
-	// Execute migration
-	_, err = s.db.ExecContext(ctx, string(migrationSQL))
+	_, err = s.pool.Exec(ctx, string(migrationSQL))
 	if err != nil {
 		return fmt.Errorf("failed to execute migration 001: %w", err)
 	}
@@ -72,7 +76,7 @@ func (s *PostgresStorage) Migrate(ctx context.Context) error {
 		return fmt.Errorf("failed to read migration file 002: %w", err)
 	}
 
-	_, err = s.db.ExecContext(ctx, string(migrationSQL2))
+	_, err = s.pool.Exec(ctx, string(migrationSQL2))
 	if err != nil {
 		return fmt.Errorf("failed to execute migration 002: %w", err)
 	}
@@ -91,13 +95,13 @@ func (s *PostgresStorage) CreateOTELTrace(ctx context.Context, trace *OTELTrace)
 		RETURNING id
 	`
 
-	err := s.db.QueryRowContext(ctx, query,
+	err := s.pool.QueryRow(ctx, query,
 		trace.TraceID, trace.SpanID, trace.ParentSpanID, trace.ServiceName, trace.SpanKind,
 		trace.StartTime, trace.EndTime, trace.Attributes, trace.Events, trace.Status, trace.CreatedAt,
 	).Scan(&trace.ID)
 
 	// ON CONFLICT DO NOTHING returns no rows — treat as success
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	return err
@@ -113,7 +117,7 @@ func (s *PostgresStorage) GetOTELTraceSpans(ctx context.Context, traceID string)
 		ORDER BY start_time ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, traceID)
+	rows, err := s.pool.Query(ctx, query, traceID)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +150,7 @@ func (s *PostgresStorage) CreateReplayTrace(ctx context.Context, trace *ReplayTr
 		RETURNING id
 	`
 
-	err := s.db.QueryRowContext(ctx, query,
+	err := s.pool.QueryRow(ctx, query,
 		trace.TraceID, trace.SpanID, trace.RunID, trace.StepIndex, trace.CreatedAt,
 		trace.Provider, trace.Model, trace.Prompt,
 		trace.Completion, trace.Parameters, trace.PromptTokens, trace.CompletionTokens,
@@ -154,7 +158,7 @@ func (s *PostgresStorage) CreateReplayTrace(ctx context.Context, trace *ReplayTr
 	).Scan(&trace.ID)
 
 	// ON CONFLICT DO NOTHING returns no rows — treat as success
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	return err
@@ -171,7 +175,7 @@ func (s *PostgresStorage) GetReplayTraceSpans(ctx context.Context, traceID strin
 		ORDER BY step_index ASC, created_at ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, traceID)
+	rows, err := s.pool.Query(ctx, query, traceID)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +247,7 @@ func (s *PostgresStorage) ListReplayTraces(ctx context.Context, filters TraceFil
 		args = append(args, filters.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +281,7 @@ func (s *PostgresStorage) CreateToolCapture(ctx context.Context, capture *ToolCa
 		RETURNING id
 	`
 
-	return s.db.QueryRowContext(ctx, query,
+	return s.pool.QueryRow(ctx, query,
 		capture.TraceID, capture.SpanID, capture.StepIndex, capture.ToolName, capture.Args, capture.ArgsHash,
 		capture.Result, capture.Error, capture.LatencyMS, capture.RiskClass, capture.CreatedAt,
 	).Scan(&capture.ID)
@@ -293,7 +297,7 @@ func (s *PostgresStorage) GetToolCapturesByTrace(ctx context.Context, traceID st
 		ORDER BY step_index ASC, created_at ASC, id ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, traceID)
+	rows, err := s.pool.Query(ctx, query, traceID)
 	if err != nil {
 		return nil, err
 	}
@@ -329,13 +333,13 @@ func (s *PostgresStorage) GetToolCaptureByArgs(ctx context.Context, toolName str
 	`
 
 	var capture ToolCapture
-	err := s.db.QueryRowContext(ctx, query, toolName, argsHash).Scan(
+	err := s.pool.QueryRow(ctx, query, toolName, argsHash).Scan(
 		&capture.ID, &capture.TraceID, &capture.SpanID, &capture.StepIndex, &capture.ToolName, &capture.Args,
 		&capture.ArgsHash, &capture.Result, &capture.Error, &capture.LatencyMS,
 		&capture.RiskClass, &capture.CreatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("tool capture not found: %s/%s", toolName, argsHash)
 	}
 	if err != nil {
@@ -353,7 +357,7 @@ func (s *PostgresStorage) CreateExperiment(ctx context.Context, exp *Experiment)
 		) VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err := s.pool.Exec(ctx, query,
 		exp.ID, exp.Name, exp.BaselineTraceID, exp.Status, exp.Progress, exp.Config, exp.CreatedAt,
 	)
 
@@ -369,12 +373,12 @@ func (s *PostgresStorage) GetExperiment(ctx context.Context, id uuid.UUID) (*Exp
 	`
 
 	var exp Experiment
-	err := s.db.QueryRowContext(ctx, query, id).Scan(
+	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&exp.ID, &exp.Name, &exp.BaselineTraceID, &exp.Status, &exp.Progress,
 		&exp.Config, &exp.CreatedAt, &exp.CompletedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("experiment not found: %s", id)
 	}
 	if err != nil {
@@ -392,7 +396,7 @@ func (s *PostgresStorage) UpdateExperiment(ctx context.Context, exp *Experiment)
 		WHERE id = $4
 	`
 
-	_, err := s.db.ExecContext(ctx, query, exp.Status, exp.Progress, exp.CompletedAt, exp.ID)
+	_, err := s.pool.Exec(ctx, query, exp.Status, exp.Progress, exp.CompletedAt, exp.ID)
 	return err
 }
 
@@ -437,7 +441,7 @@ func (s *PostgresStorage) ListExperiments(ctx context.Context, filters Experimen
 		args = append(args, filters.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -467,7 +471,7 @@ func (s *PostgresStorage) CreateExperimentRun(ctx context.Context, run *Experime
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err := s.pool.Exec(ctx, query,
 		run.ID, run.ExperimentID, run.RunType, run.VariantConfig, run.TraceID,
 		run.Status, run.Error, run.CreatedAt,
 	)
@@ -484,12 +488,12 @@ func (s *PostgresStorage) GetExperimentRun(ctx context.Context, id uuid.UUID) (*
 	`
 
 	var run ExperimentRun
-	err := s.db.QueryRowContext(ctx, query, id).Scan(
+	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&run.ID, &run.ExperimentID, &run.RunType, &run.VariantConfig, &run.TraceID,
 		&run.Status, &run.Error, &run.CreatedAt, &run.CompletedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("experiment run not found: %s", id)
 	}
 	if err != nil {
@@ -507,7 +511,7 @@ func (s *PostgresStorage) UpdateExperimentRun(ctx context.Context, run *Experime
 		WHERE id = $5
 	`
 
-	_, err := s.db.ExecContext(ctx, query, run.TraceID, run.Status, run.Error, run.CompletedAt, run.ID)
+	_, err := s.pool.Exec(ctx, query, run.TraceID, run.Status, run.Error, run.CompletedAt, run.ID)
 	return err
 }
 
@@ -520,7 +524,7 @@ func (s *PostgresStorage) ListExperimentRuns(ctx context.Context, experimentID u
 		ORDER BY created_at ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, experimentID)
+	rows, err := s.pool.Query(ctx, query, experimentID)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +556,7 @@ func (s *PostgresStorage) CreateAnalysisResult(ctx context.Context, result *Anal
 		RETURNING id
 	`
 
-	return s.db.QueryRowContext(ctx, query,
+	return s.pool.QueryRow(ctx, query,
 		result.ExperimentID, result.BaselineRunID, result.CandidateRunID, result.BehaviorDiff,
 		result.FirstDivergence, result.SafetyDiff, result.SimilarityScore, result.QualityMetrics,
 		result.TokenDelta, result.CostDelta, result.LatencyDelta, result.CreatedAt,
@@ -569,7 +573,7 @@ func (s *PostgresStorage) GetAnalysisResults(ctx context.Context, experimentID u
 		ORDER BY created_at ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, experimentID)
+	rows, err := s.pool.Query(ctx, query, experimentID)
 	if err != nil {
 		return nil, err
 	}
@@ -592,8 +596,7 @@ func (s *PostgresStorage) GetAnalysisResults(ctx context.Context, experimentID u
 	return results, rows.Err()
 }
 
-// Evaluator methods (implementation continues...)
-// I'll add the remaining methods in the next file segment
+// Evaluator methods
 
 func (s *PostgresStorage) CreateEvaluator(ctx context.Context, evaluator *Evaluator) error {
 	query := `
@@ -602,7 +605,7 @@ func (s *PostgresStorage) CreateEvaluator(ctx context.Context, evaluator *Evalua
 		RETURNING id
 	`
 
-	return s.db.QueryRowContext(ctx, query,
+	return s.pool.QueryRow(ctx, query,
 		evaluator.Name, evaluator.Type, evaluator.Config, evaluator.Enabled,
 		evaluator.CreatedAt, evaluator.UpdatedAt,
 	).Scan(&evaluator.ID)
@@ -616,12 +619,12 @@ func (s *PostgresStorage) GetEvaluator(ctx context.Context, id int) (*Evaluator,
 	`
 
 	var eval Evaluator
-	err := s.db.QueryRowContext(ctx, query, id).Scan(
+	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&eval.ID, &eval.Name, &eval.Type, &eval.Config, &eval.Enabled,
 		&eval.CreatedAt, &eval.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("evaluator not found: %d", id)
 	}
 	if err != nil {
@@ -639,12 +642,12 @@ func (s *PostgresStorage) GetEvaluatorByName(ctx context.Context, name string) (
 	`
 
 	var eval Evaluator
-	err := s.db.QueryRowContext(ctx, query, name).Scan(
+	err := s.pool.QueryRow(ctx, query, name).Scan(
 		&eval.ID, &eval.Name, &eval.Type, &eval.Config, &eval.Enabled,
 		&eval.CreatedAt, &eval.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("evaluator not found: %s", name)
 	}
 	if err != nil {
@@ -661,7 +664,7 @@ func (s *PostgresStorage) UpdateEvaluator(ctx context.Context, evaluator *Evalua
 		WHERE id = $4
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err := s.pool.Exec(ctx, query,
 		evaluator.Config, evaluator.Enabled, time.Now(), evaluator.ID,
 	)
 	return err
@@ -679,7 +682,7 @@ func (s *PostgresStorage) ListEvaluators(ctx context.Context, enabledOnly bool) 
 
 	query += " ORDER BY created_at ASC"
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -703,8 +706,113 @@ func (s *PostgresStorage) ListEvaluators(ctx context.Context, enabledOnly bool) 
 
 func (s *PostgresStorage) DeleteEvaluator(ctx context.Context, id int) error {
 	query := `DELETE FROM evaluators WHERE id = $1`
-	_, err := s.db.ExecContext(ctx, query, id)
+	_, err := s.pool.Exec(ctx, query, id)
 	return err
 }
 
-// Continue with remaining methods in next segment...
+// copyUpsert performs COPY-into-temp-table then INSERT...ON CONFLICT DO NOTHING
+// into the real table, all within the given transaction. Returns rows inserted.
+func copyUpsert(ctx context.Context, tx pgx.Tx, table string, columns []string, conflict string, nRows int, rowFn func(int) ([]any, error)) (int64, error) {
+	tmp := "tmp_" + table
+	_, err := tx.Exec(ctx, fmt.Sprintf(`CREATE TEMP TABLE %s (LIKE %s) ON COMMIT DROP`, tmp, table))
+	if err != nil {
+		return 0, fmt.Errorf("create temp %s: %w", table, err)
+	}
+
+	// LIKE copies NOT NULL from the id column but not its SERIAL default, so relax it.
+	_, err = tx.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN id DROP NOT NULL`, tmp))
+	if err != nil {
+		return 0, fmt.Errorf("alter temp %s: %w", table, err)
+	}
+
+	_, err = tx.CopyFrom(ctx, pgx.Identifier{tmp}, columns, pgx.CopyFromSlice(nRows, rowFn))
+	if err != nil {
+		return 0, fmt.Errorf("copy %s: %w", table, err)
+	}
+
+	cols := strings.Join(columns, ", ")
+	result, err := tx.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO %s (%s) SELECT %s FROM %s ON CONFLICT %s DO NOTHING`,
+		table, cols, cols, tmp, conflict,
+	))
+	if err != nil {
+		return 0, fmt.Errorf("upsert %s: %w", table, err)
+	}
+
+	return result.RowsAffected(), nil
+}
+
+// CreateIngestionBatch atomically inserts OTEL traces, replay traces, and tool captures
+// in a single transaction. If any stage fails, the entire batch is rolled back.
+func (s *PostgresStorage) CreateIngestionBatch(ctx context.Context, otels []*OTELTrace, replays []*ReplayTrace, tools []*ToolCapture) (IngestCounts, error) {
+	var counts IngestCounts
+
+	if len(otels) == 0 && len(replays) == 0 && len(tools) == 0 {
+		return counts, nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return counts, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if len(otels) > 0 {
+		counts.OTELTraces, err = copyUpsert(ctx, tx, "otel_traces",
+			[]string{"trace_id", "span_id", "parent_span_id", "service_name", "span_kind",
+				"start_time", "end_time", "attributes", "events", "status", "created_at"},
+			"(trace_id, span_id)",
+			len(otels), func(i int) ([]any, error) {
+				t := otels[i]
+				return []any{
+					t.TraceID, t.SpanID, t.ParentSpanID, t.ServiceName, t.SpanKind,
+					t.StartTime, t.EndTime, t.Attributes, t.Events, t.Status, t.CreatedAt,
+				}, nil
+			})
+		if err != nil {
+			return counts, err
+		}
+	}
+
+	if len(replays) > 0 {
+		counts.ReplayTraces, err = copyUpsert(ctx, tx, "replay_traces",
+			[]string{"trace_id", "span_id", "run_id", "step_index", "created_at",
+				"provider", "model", "prompt", "completion", "parameters",
+				"prompt_tokens", "completion_tokens", "total_tokens", "latency_ms", "metadata"},
+			"(trace_id, span_id)",
+			len(replays), func(i int) ([]any, error) {
+				t := replays[i]
+				return []any{
+					t.TraceID, t.SpanID, t.RunID, t.StepIndex, t.CreatedAt,
+					t.Provider, t.Model, t.Prompt, t.Completion, t.Parameters,
+					t.PromptTokens, t.CompletionTokens, t.TotalTokens, t.LatencyMS, t.Metadata,
+				}, nil
+			})
+		if err != nil {
+			return counts, err
+		}
+	}
+
+	if len(tools) > 0 {
+		counts.ToolCaptures, err = copyUpsert(ctx, tx, "tool_captures",
+			[]string{"trace_id", "span_id", "step_index", "tool_name", "args", "args_hash",
+				"result", "error", "latency_ms", "risk_class", "created_at"},
+			"(trace_id, span_id, step_index)",
+			len(tools), func(i int) ([]any, error) {
+				c := tools[i]
+				return []any{
+					c.TraceID, c.SpanID, c.StepIndex, c.ToolName, c.Args, c.ArgsHash,
+					c.Result, c.Error, c.LatencyMS, c.RiskClass, c.CreatedAt,
+				}, nil
+			})
+		if err != nil {
+			return counts, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return IngestCounts{}, fmt.Errorf("commit failed: %w", err)
+	}
+
+	return counts, nil
+}

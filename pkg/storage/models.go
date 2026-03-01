@@ -1,55 +1,31 @@
 package storage
 
 import (
-	"database/sql/driver"
-	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-// JSONB is a custom type for PostgreSQL JSONB columns
+// JSONB is a type alias for PostgreSQL JSONB columns.
+// pgx handles map[string]interface{} natively as JSONB, so no custom
+// driver.Valuer or sql.Scanner implementations are needed.
 type JSONB map[string]interface{}
-
-// Value implements the driver.Valuer interface
-func (j JSONB) Value() (driver.Value, error) {
-	if j == nil {
-		return nil, nil
-	}
-	return json.Marshal(j)
-}
-
-// Scan implements the sql.Scanner interface
-func (j *JSONB) Scan(value interface{}) error {
-	if value == nil {
-		*j = nil
-		return nil
-	}
-
-	bytes, ok := value.([]byte)
-	if !ok {
-		return fmt.Errorf("failed to unmarshal JSONB value: %v", value)
-	}
-
-	return json.Unmarshal(bytes, j)
-}
 
 // OTELTrace represents a raw OTEL trace span.
 // A single trace_id can have many spans (one per operation).
 type OTELTrace struct {
-	ID            int       `db:"id"`
-	TraceID       string    `db:"trace_id"`
-	SpanID        string    `db:"span_id"`
-	ParentSpanID  *string   `db:"parent_span_id"`
-	ServiceName   string    `db:"service_name"`
-	SpanKind      string    `db:"span_kind"`
-	StartTime     time.Time `db:"start_time"`
-	EndTime       time.Time `db:"end_time"`
-	Attributes    JSONB     `db:"attributes"`
-	Events        JSONB     `db:"events"`
-	Status        JSONB     `db:"status"`
-	CreatedAt     time.Time `db:"created_at"`
+	ID           int       `db:"id"`
+	TraceID      string    `db:"trace_id"`
+	SpanID       string    `db:"span_id"`
+	ParentSpanID *string   `db:"parent_span_id"`
+	ServiceName  string    `db:"service_name"`
+	SpanKind     string    `db:"span_kind"`
+	StartTime    time.Time `db:"start_time"`
+	EndTime      time.Time `db:"end_time"`
+	Attributes   JSONB     `db:"attributes"`
+	Events       JSONB     `db:"events"`
+	Status       JSONB     `db:"status"`
+	CreatedAt    time.Time `db:"created_at"`
 }
 
 // ReplayTrace represents a parsed LLM call in replay-specific schema.
@@ -91,14 +67,14 @@ type ToolCapture struct {
 
 // Experiment represents a replay experiment
 type Experiment struct {
-	ID                uuid.UUID  `db:"id"`
-	Name              string     `db:"name"`
-	BaselineTraceID   string     `db:"baseline_trace_id"`
-	Status            string     `db:"status"`
-	Progress          float64    `db:"progress"`
-	Config            JSONB      `db:"config"`
-	CreatedAt         time.Time  `db:"created_at"`
-	CompletedAt       *time.Time `db:"completed_at"`
+	ID              uuid.UUID  `db:"id"`
+	Name            string     `db:"name"`
+	BaselineTraceID string     `db:"baseline_trace_id"`
+	Status          string     `db:"status"`
+	Progress        float64    `db:"progress"`
+	Config          JSONB      `db:"config"`
+	CreatedAt       time.Time  `db:"created_at"`
+	CompletedAt     *time.Time `db:"completed_at"`
 }
 
 // ExperimentRun represents a single run within an experiment
@@ -116,19 +92,19 @@ type ExperimentRun struct {
 
 // AnalysisResult represents comparative analysis results
 type AnalysisResult struct {
-	ID               int       `db:"id"`
-	ExperimentID     uuid.UUID `db:"experiment_id"`
-	BaselineRunID    uuid.UUID `db:"baseline_run_id"`
-	CandidateRunID   uuid.UUID `db:"candidate_run_id"`
-	BehaviorDiff     JSONB     `db:"behavior_diff"`
-	FirstDivergence  JSONB     `db:"first_divergence"`
-	SafetyDiff       JSONB     `db:"safety_diff"`
-	SimilarityScore  float64   `db:"similarity_score"`
-	QualityMetrics   JSONB     `db:"quality_metrics"`
-	TokenDelta       int       `db:"token_delta"`
-	CostDelta        float64   `db:"cost_delta"`
-	LatencyDelta     int       `db:"latency_delta"`
-	CreatedAt        time.Time `db:"created_at"`
+	ID              int       `db:"id"`
+	ExperimentID    uuid.UUID `db:"experiment_id"`
+	BaselineRunID   uuid.UUID `db:"baseline_run_id"`
+	CandidateRunID  uuid.UUID `db:"candidate_run_id"`
+	BehaviorDiff    JSONB     `db:"behavior_diff"`
+	FirstDivergence JSONB     `db:"first_divergence"`
+	SafetyDiff      JSONB     `db:"safety_diff"`
+	SimilarityScore float64   `db:"similarity_score"`
+	QualityMetrics  JSONB     `db:"quality_metrics"`
+	TokenDelta      int       `db:"token_delta"`
+	CostDelta       float64   `db:"cost_delta"`
+	LatencyDelta    int       `db:"latency_delta"`
+	CreatedAt       time.Time `db:"created_at"`
 }
 
 // Evaluator represents an evaluator configuration
@@ -231,6 +207,13 @@ const (
 	DriftVerdictFail    = "fail"
 	DriftVerdictPending = "pending"
 )
+
+// IngestCounts holds the number of rows inserted by CreateIngestionBatch.
+type IngestCounts struct {
+	OTELTraces   int64
+	ReplayTraces int64
+	ToolCaptures int64
+}
 
 // Status constants
 const (
