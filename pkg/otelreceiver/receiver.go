@@ -2,10 +2,12 @@ package otelreceiver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/ptrace"
@@ -14,6 +16,19 @@ import (
 
 	"github.com/lethaltrifecta/replay/pkg/storage"
 	"github.com/lethaltrifecta/replay/pkg/utils/logger"
+)
+
+var (
+	errUnsupportedContentType      = errors.New("unsupported content type")
+	errUnsupportedResponseEncoding = errors.New("unsupported response encoding")
+)
+
+type httpPayloadEncoding int
+
+const (
+	httpPayloadEncodingUnknown httpPayloadEncoding = iota
+	httpPayloadEncodingJSON
+	httpPayloadEncodingProtobuf
 )
 
 // Receiver handles OTLP trace ingestion
@@ -153,10 +168,14 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 
 	r.logger.Debug("Received trace data", "size_bytes", len(body))
 
-	// Unmarshal using ptrace JSON unmarshaler
-	unmarshaler := &ptrace.JSONUnmarshaler{}
-	traces, err := unmarshaler.UnmarshalTraces(body)
+	traces, responseEncoding, err := unmarshalHTTPTraces(req.Header.Get("Content-Type"), body)
 	if err != nil {
+		if errors.Is(err, errUnsupportedContentType) {
+			r.logger.Error("Unsupported OTLP HTTP content type", "content_type", req.Header.Get("Content-Type"))
+			http.Error(w, "Unsupported Content-Type", http.StatusUnsupportedMediaType)
+			return
+		}
+
 		r.logger.Error("Failed to unmarshal HTTP traces", "error", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -172,9 +191,82 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 
 	r.logger.Debug("HTTP trace processed successfully")
 
-	w.Header().Set("Content-Type", "application/json")
+	if err := writeHTTPExportResponse(w, responseEncoding); err != nil {
+		r.logger.Error("Failed to marshal OTLP HTTP response", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// unmarshalHTTPTraces unmarshals OTLP traces from HTTP request payloads.
+// Supports OTLP JSON and OTLP protobuf based on Content-Type.
+func unmarshalHTTPTraces(contentType string, body []byte) (ptrace.Traces, httpPayloadEncoding, error) {
+	mediaType := baseContentType(contentType)
+
+	switch mediaType {
+	case "application/json":
+		unmarshaler := &ptrace.JSONUnmarshaler{}
+		traces, err := unmarshaler.UnmarshalTraces(body)
+		return traces, httpPayloadEncodingJSON, err
+	case "application/x-protobuf", "application/protobuf", "application/octet-stream":
+		unmarshaler := &ptrace.ProtoUnmarshaler{}
+		traces, err := unmarshaler.UnmarshalTraces(body)
+		return traces, httpPayloadEncodingProtobuf, err
+	case "":
+		// Fallback for clients that omit Content-Type.
+		protoUnmarshaler := &ptrace.ProtoUnmarshaler{}
+		if traces, err := protoUnmarshaler.UnmarshalTraces(body); err == nil {
+			return traces, httpPayloadEncodingProtobuf, nil
+		}
+
+		jsonUnmarshaler := &ptrace.JSONUnmarshaler{}
+		traces, err := jsonUnmarshaler.UnmarshalTraces(body)
+		return traces, httpPayloadEncodingJSON, err
+	default:
+		return ptrace.Traces{}, httpPayloadEncodingUnknown, fmt.Errorf("%w: %s", errUnsupportedContentType, mediaType)
+	}
+}
+
+func writeHTTPExportResponse(w http.ResponseWriter, encoding httpPayloadEncoding) error {
+	resp := ptraceotlp.NewExportResponse()
+
+	var (
+		contentType string
+		body        []byte
+		err         error
+	)
+
+	switch encoding {
+	case httpPayloadEncodingJSON:
+		contentType = "application/json"
+		body, err = resp.MarshalJSON()
+	case httpPayloadEncodingProtobuf:
+		contentType = "application/x-protobuf"
+		body, err = resp.MarshalProto()
+	default:
+		return fmt.Errorf("%w: %d", errUnsupportedResponseEncoding, encoding)
+	}
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("{}"))
+	_, err = w.Write(body)
+	return err
+}
+
+func baseContentType(contentType string) string {
+	contentType = strings.TrimSpace(strings.ToLower(contentType))
+	if contentType == "" {
+		return ""
+	}
+
+	if idx := strings.Index(contentType, ";"); idx >= 0 {
+		return strings.TrimSpace(contentType[:idx])
+	}
+
+	return contentType
 }
 
 // processTraces processes incoming traces and stores them
