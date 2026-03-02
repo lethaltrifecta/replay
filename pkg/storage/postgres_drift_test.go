@@ -296,3 +296,76 @@ func TestGetLatestDriftResult(t *testing.T) {
 	assert.Equal(t, 0.7, latest.DriftScore)
 	assert.Equal(t, DriftVerdictWarn, latest.Verdict)
 }
+
+func TestListDriftResults(t *testing.T) {
+	store := setupTestDB(t)
+	defer teardownTestDB(t, store)
+
+	ctx := context.Background()
+
+	// Empty
+	results, err := store.ListDriftResults(ctx, 10)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	// Insert 3 results
+	for i, tid := range []string{"trace-a", "trace-b", "trace-c"} {
+		r := &DriftResult{
+			TraceID:         tid,
+			BaselineTraceID: "baseline-x",
+			DriftScore:      float64(i) * 0.1,
+			Verdict:         DriftVerdictPass,
+		}
+		err := store.CreateDriftResult(ctx, r)
+		require.NoError(t, err)
+	}
+
+	// Limit 2 — should get the 2 newest
+	results, err = store.ListDriftResults(ctx, 2)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "trace-c", results[0].TraceID)
+	assert.Equal(t, "trace-b", results[1].TraceID)
+
+	// Limit larger than count — returns all
+	results, err = store.ListDriftResults(ctx, 100)
+	require.NoError(t, err)
+	assert.Len(t, results, 3)
+}
+
+func TestHasDriftResultForBaseline(t *testing.T) {
+	store := setupTestDB(t)
+	defer teardownTestDB(t, store)
+
+	ctx := context.Background()
+
+	// No results
+	exists, err := store.HasDriftResultForBaseline(ctx, "trace-1", "baseline-1")
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	// Insert a result for trace-1 against baseline-1
+	r := &DriftResult{
+		TraceID:         "trace-1",
+		BaselineTraceID: "baseline-1",
+		DriftScore:      0.1,
+		Verdict:         DriftVerdictPass,
+	}
+	err = store.CreateDriftResult(ctx, r)
+	require.NoError(t, err)
+
+	// Now exists for same pair
+	exists, err = store.HasDriftResultForBaseline(ctx, "trace-1", "baseline-1")
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	// Does NOT exist for different baseline
+	exists, err = store.HasDriftResultForBaseline(ctx, "trace-1", "baseline-2")
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	// Does NOT exist for different trace
+	exists, err = store.HasDriftResultForBaseline(ctx, "trace-2", "baseline-1")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}

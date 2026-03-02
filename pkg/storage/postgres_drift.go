@@ -193,6 +193,36 @@ func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselin
 	return results, rows.Err()
 }
 
+// ListDriftResults returns the most recent drift results across all traces.
+func (s *PostgresStorage) ListDriftResults(ctx context.Context, limit int) ([]*DriftResult, error) {
+	query := `
+		SELECT id, trace_id, baseline_trace_id, drift_score, verdict, details, created_at
+		FROM drift_results
+		ORDER BY created_at DESC, id DESC
+		LIMIT $1
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []*DriftResult
+	for rows.Next() {
+		var r DriftResult
+		err := rows.Scan(
+			&r.ID, &r.TraceID, &r.BaselineTraceID, &r.DriftScore, &r.Verdict, &r.Details, &r.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, &r)
+	}
+
+	return results, rows.Err()
+}
+
 // GetLatestDriftResult retrieves the most recent drift result for a trace ID.
 func (s *PostgresStorage) GetLatestDriftResult(ctx context.Context, traceID string) (*DriftResult, error) {
 	query := `
@@ -216,4 +246,19 @@ func (s *PostgresStorage) GetLatestDriftResult(ctx context.Context, traceID stri
 	}
 
 	return &r, nil
+}
+
+// HasDriftResultForBaseline checks whether a drift result exists for a specific
+// (trace_id, baseline_trace_id) pair. Returns (false, nil) when no result exists,
+// distinguishing "not found" from actual DB errors.
+func (s *PostgresStorage) HasDriftResultForBaseline(ctx context.Context, traceID string, baselineTraceID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM drift_results WHERE trace_id = $1 AND baseline_trace_id = $2)`,
+		traceID, baselineTraceID,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check drift result existence: %w", err)
+	}
+	return exists, nil
 }

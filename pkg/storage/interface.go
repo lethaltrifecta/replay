@@ -87,6 +87,8 @@ type Storage interface {
 	GetDriftResults(ctx context.Context, traceID string) ([]*DriftResult, error)
 	GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string) ([]*DriftResult, error)
 	GetLatestDriftResult(ctx context.Context, traceID string) (*DriftResult, error)
+	ListDriftResults(ctx context.Context, limit int) ([]*DriftResult, error)
+	HasDriftResultForBaseline(ctx context.Context, traceID string, baselineTraceID string) (bool, error)
 }
 
 // TraceFilters for filtering trace queries
