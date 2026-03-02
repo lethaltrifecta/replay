@@ -96,12 +96,12 @@ func connectDB() (*storage.PostgresStorage, error) {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	store, err := storage.NewPostgresStorage(cfg.PostgresURL, cfg.PostgresMaxConn)
+	ctx := context.Background()
+	store, err := storage.NewPostgresStorage(ctx, cfg.PostgresURL, cfg.PostgresMaxConn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	ctx := context.Background()
 	if err := store.Migrate(ctx); err != nil {
 		store.Close()
 		return nil, fmt.Errorf("failed to run migrations: %w", err)

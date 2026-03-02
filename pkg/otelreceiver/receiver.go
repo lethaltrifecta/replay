@@ -179,6 +179,13 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 
 // processTraces processes incoming traces and stores them
 func (r *Receiver) processTraces(ctx context.Context, traces ptrace.Traces) error {
+
+	var (
+		otelTraces   []*storage.OTELTrace
+		replayTraces []*storage.ReplayTrace
+		toolCaptures []*storage.ToolCapture
+	)
+
 	resourceSpans := traces.ResourceSpans()
 	r.logger.Debug("Processing traces", "resource_spans_count", resourceSpans.Len())
 
@@ -199,14 +206,7 @@ func (r *Receiver) processTraces(ctx context.Context, traces ptrace.Traces) erro
 
 				// Store raw OTEL trace
 				otelTrace := r.parser.ParseOTELSpan(span, rs.Resource())
-				if err := r.storage.CreateOTELTrace(ctx, otelTrace); err != nil {
-					r.logger.Warn("Failed to store OTEL trace",
-						"trace_id", otelTrace.TraceID,
-						"error", err,
-					)
-					// Continue processing other spans
-					continue
-				}
+				otelTraces = append(otelTraces, otelTrace)
 				r.logger.Debug("Stored raw OTEL trace", "trace_id", traceID)
 
 				// Check if this is an LLM span (has gen_ai.* attributes)
@@ -220,45 +220,54 @@ func (r *Receiver) processTraces(ctx context.Context, traces ptrace.Traces) erro
 						continue
 					}
 
-					if err := r.storage.CreateReplayTrace(ctx, replayTrace); err != nil {
-						r.logger.Warn("Failed to store replay trace",
-							"trace_id", replayTrace.TraceID,
-							"error", err,
-						)
-					} else {
-						r.logger.Debug("Stored LLM trace",
-							"trace_id", replayTrace.TraceID,
-							"model", replayTrace.Model,
-							"tokens", replayTrace.TotalTokens,
-						)
-					}
+					replayTraces = append(replayTraces, replayTrace)
+					r.logger.Debug("Stored LLM trace",
+						"trace_id", replayTrace.TraceID,
+						"model", replayTrace.Model,
+						"tokens", replayTrace.TotalTokens,
+					)
 
 					// Parse and store tool calls
-					toolCaptures := r.parser.ParseToolCalls(span, replayTrace.TraceID, replayTrace.SpanID)
-					r.logger.Debug("Parsed tool calls", "trace_id", traceID, "count", len(toolCaptures))
+					parsedToolCaptures := r.parser.ParseToolCalls(span, replayTrace.TraceID, replayTrace.SpanID)
+					r.logger.Debug("Parsed tool calls", "trace_id", traceID, "count", len(parsedToolCaptures))
 
-					for idx, capture := range toolCaptures {
-						if err := r.storage.CreateToolCapture(ctx, capture); err != nil {
-							r.logger.Warn("Failed to store tool capture",
-								"trace_id", capture.TraceID,
-								"tool_name", capture.ToolName,
-								"error", err,
-							)
-						} else {
-							r.logger.Debug("Stored tool capture",
-								"trace_id", capture.TraceID,
-								"tool_name", capture.ToolName,
-								"step_index", capture.StepIndex,
-								"index", idx,
-							)
-						}
+					for idx, capture := range parsedToolCaptures {
+						toolCaptures = append(toolCaptures, capture)
+						r.logger.Debug("Stored tool capture",
+							"trace_id", capture.TraceID,
+							"tool_name", capture.ToolName,
+							"step_index", capture.StepIndex,
+							"index", idx,
+						)
 					}
 				}
 			}
 		}
 	}
 
+	err := r.insertTraces(ctx, otelTraces, replayTraces, toolCaptures)
+	if err != nil {
+		return err
+	}
+
 	r.logger.Debug("Finished processing traces")
+	return nil
+}
+
+func (r *Receiver) insertTraces(ctx context.Context, otels []*storage.OTELTrace, replays []*storage.ReplayTrace, tools []*storage.ToolCapture) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	counts, err := r.storage.CreateIngestionBatch(ctx, otels, replays, tools)
+	if err != nil {
+		return fmt.Errorf("ingestion batch: %w", err)
+	}
+
+	r.logger.Debug("Stored ingestion batch",
+		"otel_traces", counts.OTELTraces,
+		"replay_traces", counts.ReplayTraces,
+		"tool_captures", counts.ToolCaptures,
+	)
 	return nil
 }
 

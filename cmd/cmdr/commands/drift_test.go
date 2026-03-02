@@ -107,6 +107,9 @@ func (m *mockStore) Close() error                                             { 
 func (m *mockStore) Ping(_ context.Context) error                             { return nil }
 func (m *mockStore) Migrate(_ context.Context) error                          { return nil }
 func (m *mockStore) CreateOTELTrace(_ context.Context, _ *storage.OTELTrace) error { return nil }
+func (m *mockStore) CreateIngestionBatch(_ context.Context, _ []*storage.OTELTrace, _ []*storage.ReplayTrace, _ []*storage.ToolCapture) (storage.IngestCounts, error) {
+	return storage.IngestCounts{}, nil
+}
 func (m *mockStore) GetOTELTraceSpans(_ context.Context, _ string) ([]*storage.OTELTrace, error) {
 	return nil, nil
 }

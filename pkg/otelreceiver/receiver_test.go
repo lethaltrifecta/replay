@@ -89,6 +89,18 @@ func (m *mockStorage) GetLatestDriftResult(ctx context.Context, traceID string) 
 func (m *mockStorage) ListDriftResults(ctx context.Context, limit int) ([]*storage.DriftResult, error) { return nil, nil }
 func (m *mockStorage) HasDriftResultForBaseline(ctx context.Context, traceID string, baselineTraceID string) (bool, error) { return false, nil }
 
+// Batch operations
+func (m *mockStorage) CreateIngestionBatch(ctx context.Context, otels []*storage.OTELTrace, replays []*storage.ReplayTrace, tools []*storage.ToolCapture) (storage.IngestCounts, error) {
+	m.otelTraces = append(m.otelTraces, otels...)
+	m.replayTraces = append(m.replayTraces, replays...)
+	m.toolCaptures = append(m.toolCaptures, tools...)
+	return storage.IngestCounts{
+		OTELTraces:   int64(len(otels)),
+		ReplayTraces: int64(len(replays)),
+		ToolCaptures: int64(len(tools)),
+	}, nil
+}
+
 func TestParser_IsLLMSpan(t *testing.T) {
 	log, _ := logger.New("debug")
 	parser := NewParser(log)

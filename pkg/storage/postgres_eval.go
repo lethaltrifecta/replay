@@ -2,10 +2,11 @@ package storage
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Evaluation Run methods
@@ -16,7 +17,7 @@ func (s *PostgresStorage) CreateEvaluationRun(ctx context.Context, run *Evaluati
 		VALUES ($1, $2, $3, $4, $5)
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err := s.pool.Exec(ctx, query,
 		run.ID, run.ExperimentRunID, run.Status, run.StartedAt, run.CompletedAt,
 	)
 
@@ -31,11 +32,11 @@ func (s *PostgresStorage) GetEvaluationRun(ctx context.Context, id uuid.UUID) (*
 	`
 
 	var run EvaluationRun
-	err := s.db.QueryRowContext(ctx, query, id).Scan(
+	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&run.ID, &run.ExperimentRunID, &run.Status, &run.StartedAt, &run.CompletedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("evaluation run not found: %s", id)
 	}
 	if err != nil {
@@ -52,7 +53,7 @@ func (s *PostgresStorage) UpdateEvaluationRun(ctx context.Context, run *Evaluati
 		WHERE id = $3
 	`
 
-	_, err := s.db.ExecContext(ctx, query, run.Status, run.CompletedAt, run.ID)
+	_, err := s.pool.Exec(ctx, query, run.Status, run.CompletedAt, run.ID)
 	return err
 }
 
@@ -67,7 +68,7 @@ func (s *PostgresStorage) CreateEvaluatorResult(ctx context.Context, result *Eva
 		RETURNING id
 	`
 
-	return s.db.QueryRowContext(ctx, query,
+	return s.pool.QueryRow(ctx, query,
 		result.EvaluationRunID, result.EvaluatorID, result.Scores, result.OverallScore,
 		result.Passed, result.Reasoning, result.Metadata, result.EvaluatedAt,
 	).Scan(&result.ID)
@@ -82,7 +83,7 @@ func (s *PostgresStorage) GetEvaluatorResults(ctx context.Context, evaluationRun
 		ORDER BY evaluated_at ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, evaluationRunID)
+	rows, err := s.pool.Query(ctx, query, evaluationRunID)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +116,7 @@ func (s *PostgresStorage) CreateHumanEvaluation(ctx context.Context, eval *Human
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err := s.pool.Exec(ctx, query,
 		eval.ID, eval.EvaluationRunID, eval.ExperimentRunID, eval.Output, eval.Context,
 		eval.Status, eval.AssignedTo, eval.Scores, eval.Feedback, eval.CreatedAt,
 		eval.AssignedAt, eval.ReviewedAt,
@@ -133,13 +134,13 @@ func (s *PostgresStorage) GetHumanEvaluation(ctx context.Context, id uuid.UUID) 
 	`
 
 	var eval HumanEvaluation
-	err := s.db.QueryRowContext(ctx, query, id).Scan(
+	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&eval.ID, &eval.EvaluationRunID, &eval.ExperimentRunID, &eval.Output, &eval.Context,
 		&eval.Status, &eval.AssignedTo, &eval.Scores, &eval.Feedback, &eval.CreatedAt,
 		&eval.AssignedAt, &eval.ReviewedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("human evaluation not found: %s", id)
 	}
 	if err != nil {
@@ -157,7 +158,7 @@ func (s *PostgresStorage) UpdateHumanEvaluation(ctx context.Context, eval *Human
 		WHERE id = $7
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err := s.pool.Exec(ctx, query,
 		eval.Status, eval.AssignedTo, eval.Scores, eval.Feedback,
 		eval.AssignedAt, eval.ReviewedAt, eval.ID,
 	)
@@ -182,7 +183,7 @@ func (s *PostgresStorage) ListPendingHumanEvaluations(ctx context.Context, assig
 
 	query += " ORDER BY created_at ASC"
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +215,7 @@ func (s *PostgresStorage) CreateGroundTruth(ctx context.Context, gt *GroundTruth
 		RETURNING id
 	`
 
-	return s.db.QueryRowContext(ctx, query,
+	return s.pool.QueryRow(ctx, query,
 		gt.TaskID, gt.TaskType, gt.Input, gt.ExpectedOutput, gt.Metadata, gt.CreatedAt,
 	).Scan(&gt.ID)
 }
@@ -227,11 +228,11 @@ func (s *PostgresStorage) GetGroundTruth(ctx context.Context, taskID string) (*G
 	`
 
 	var gt GroundTruth
-	err := s.db.QueryRowContext(ctx, query, taskID).Scan(
+	err := s.pool.QueryRow(ctx, query, taskID).Scan(
 		&gt.ID, &gt.TaskID, &gt.TaskType, &gt.Input, &gt.ExpectedOutput, &gt.Metadata, &gt.CreatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("ground truth not found: %s", taskID)
 	}
 	if err != nil {
@@ -248,7 +249,7 @@ func (s *PostgresStorage) UpdateGroundTruth(ctx context.Context, gt *GroundTruth
 		WHERE task_id = $5
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err := s.pool.Exec(ctx, query,
 		gt.TaskType, gt.Input, gt.ExpectedOutput, gt.Metadata, gt.TaskID,
 	)
 
@@ -270,7 +271,7 @@ func (s *PostgresStorage) ListGroundTruth(ctx context.Context, taskType *string)
 
 	query += " ORDER BY created_at DESC"
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +294,7 @@ func (s *PostgresStorage) ListGroundTruth(ctx context.Context, taskType *string)
 
 func (s *PostgresStorage) DeleteGroundTruth(ctx context.Context, taskID string) error {
 	query := `DELETE FROM ground_truth WHERE task_id = $1`
-	_, err := s.db.ExecContext(ctx, query, taskID)
+	_, err := s.pool.Exec(ctx, query, taskID)
 	return err
 }
 
@@ -308,7 +309,7 @@ func (s *PostgresStorage) CreateEvaluationSummary(ctx context.Context, summary *
 		RETURNING id
 	`
 
-	return s.db.QueryRowContext(ctx, query,
+	return s.pool.QueryRow(ctx, query,
 		summary.ExperimentID, summary.ExperimentRunID, summary.OverallScore, summary.Passed,
 		summary.EvaluatorScores, summary.Rank, summary.IsBest, summary.CreatedAt,
 	).Scan(&summary.ID)
@@ -323,7 +324,7 @@ func (s *PostgresStorage) GetEvaluationSummary(ctx context.Context, experimentID
 		ORDER BY rank ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, experimentID)
+	rows, err := s.pool.Query(ctx, query, experimentID)
 	if err != nil {
 		return nil, err
 	}
