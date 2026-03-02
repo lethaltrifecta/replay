@@ -78,6 +78,7 @@ test: ## Run unit tests
 	@echo "Running unit tests..."
 	@if [ ! -f .env ]; then echo "⚠️  Warning: .env file not found for test config"; fi
 	@set -a; [ -f .env ] && . ./.env; set +a; \
+	$(GOTEST) -run '^$$' ./pkg/...; \
 	TEST_PKGS=$$(go list -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./pkg/... | xargs); \
 	$(GOTEST) -v -race -coverprofile=coverage.out $$TEST_PKGS
 

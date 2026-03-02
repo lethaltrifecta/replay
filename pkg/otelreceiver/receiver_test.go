@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 
 	"github.com/lethaltrifecta/replay/pkg/storage"
 	"github.com/lethaltrifecta/replay/pkg/utils/logger"
@@ -335,7 +336,11 @@ func TestReceiverHandleHTTPTraces_JSON(t *testing.T) {
 	receiver.handleHTTPTraces(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
 	assert.Len(t, mock.otelTraces, 1)
+
+	resp := ptraceotlp.NewExportResponse()
+	require.NoError(t, resp.UnmarshalJSON(rr.Body.Bytes()))
 }
 
 func TestReceiverHandleHTTPTraces_Protobuf(t *testing.T) {
@@ -355,7 +360,11 @@ func TestReceiverHandleHTTPTraces_Protobuf(t *testing.T) {
 	receiver.handleHTTPTraces(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/x-protobuf", rr.Header().Get("Content-Type"))
 	assert.Len(t, mock.otelTraces, 1)
+
+	resp := ptraceotlp.NewExportResponse()
+	require.NoError(t, resp.UnmarshalProto(rr.Body.Bytes()))
 }
 
 func TestReceiverHandleHTTPTraces_UnsupportedContentType(t *testing.T) {
@@ -372,6 +381,73 @@ func TestReceiverHandleHTTPTraces_UnsupportedContentType(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnsupportedMediaType, rr.Code)
 	assert.Len(t, mock.otelTraces, 0)
+}
+
+func TestReceiverHandleHTTPTraces_JSONWithCharset(t *testing.T) {
+	log, _ := logger.New("debug")
+	mock := &mockStorage{}
+	receiver, err := NewReceiver(Config{}, mock, log)
+	require.NoError(t, err)
+
+	traces := buildHTTPTestTraces()
+	body, err := (&ptrace.JSONMarshaler{}).MarshalTraces(traces)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	rr := httptest.NewRecorder()
+
+	receiver.handleHTTPTraces(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+	assert.Len(t, mock.otelTraces, 1)
+}
+
+func TestReceiverHandleHTTPTraces_NoContentType_ProtobufFallback(t *testing.T) {
+	log, _ := logger.New("debug")
+	mock := &mockStorage{}
+	receiver, err := NewReceiver(Config{}, mock, log)
+	require.NoError(t, err)
+
+	traces := buildHTTPTestTraces()
+	body, err := (&ptrace.ProtoMarshaler{}).MarshalTraces(traces)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	receiver.handleHTTPTraces(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/x-protobuf", rr.Header().Get("Content-Type"))
+	assert.Len(t, mock.otelTraces, 1)
+
+	resp := ptraceotlp.NewExportResponse()
+	require.NoError(t, resp.UnmarshalProto(rr.Body.Bytes()))
+}
+
+func TestReceiverHandleHTTPTraces_NoContentType_JSONFallback(t *testing.T) {
+	log, _ := logger.New("debug")
+	mock := &mockStorage{}
+	receiver, err := NewReceiver(Config{}, mock, log)
+	require.NoError(t, err)
+
+	traces := buildHTTPTestTraces()
+	body, err := (&ptrace.JSONMarshaler{}).MarshalTraces(traces)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	receiver.handleHTTPTraces(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+	assert.Len(t, mock.otelTraces, 1)
+
+	resp := ptraceotlp.NewExportResponse()
+	require.NoError(t, resp.UnmarshalJSON(rr.Body.Bytes()))
 }
 
 func buildHTTPTestTraces() ptrace.Traces {
