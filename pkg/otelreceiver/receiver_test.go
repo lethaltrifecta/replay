@@ -1,7 +1,10 @@
 package otelreceiver
 
 import (
+	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -17,9 +20,9 @@ import (
 
 // Mock storage for testing
 type mockStorage struct {
-	otelTraces    []*storage.OTELTrace
-	replayTraces  []*storage.ReplayTrace
-	toolCaptures  []*storage.ToolCapture
+	otelTraces   []*storage.OTELTrace
+	replayTraces []*storage.ReplayTrace
+	toolCaptures []*storage.ToolCapture
 }
 
 func (m *mockStorage) CreateOTELTrace(ctx context.Context, trace *storage.OTELTrace) error {
@@ -38,54 +41,138 @@ func (m *mockStorage) CreateToolCapture(ctx context.Context, capture *storage.To
 }
 
 // Implement other required methods (stubs)
-func (m *mockStorage) Close() error                                                                        { return nil }
-func (m *mockStorage) Ping(ctx context.Context) error                                                      { return nil }
-func (m *mockStorage) Migrate(ctx context.Context) error                                                   { return nil }
-func (m *mockStorage) GetOTELTraceSpans(ctx context.Context, traceID string) ([]*storage.OTELTrace, error) { return nil, nil }
-func (m *mockStorage) GetReplayTraceSpans(ctx context.Context, traceID string) ([]*storage.ReplayTrace, error) { return nil, nil }
-func (m *mockStorage) ListReplayTraces(ctx context.Context, filters storage.TraceFilters) ([]*storage.ReplayTrace, error) { return nil, nil }
-func (m *mockStorage) GetToolCapturesByTrace(ctx context.Context, traceID string) ([]*storage.ToolCapture, error) { return nil, nil }
-func (m *mockStorage) GetToolCaptureByArgs(ctx context.Context, toolName string, argsHash string) (*storage.ToolCapture, error) { return nil, nil }
-func (m *mockStorage) CreateExperiment(ctx context.Context, exp *storage.Experiment) error                { return nil }
-func (m *mockStorage) GetExperiment(ctx context.Context, id uuid.UUID) (*storage.Experiment, error)       { return nil, nil }
-func (m *mockStorage) UpdateExperiment(ctx context.Context, exp *storage.Experiment) error                { return nil }
-func (m *mockStorage) ListExperiments(ctx context.Context, filters storage.ExperimentFilters) ([]*storage.Experiment, error) { return nil, nil }
-func (m *mockStorage) CreateExperimentRun(ctx context.Context, run *storage.ExperimentRun) error          { return nil }
-func (m *mockStorage) GetExperimentRun(ctx context.Context, id uuid.UUID) (*storage.ExperimentRun, error) { return nil, nil }
-func (m *mockStorage) UpdateExperimentRun(ctx context.Context, run *storage.ExperimentRun) error          { return nil }
-func (m *mockStorage) ListExperimentRuns(ctx context.Context, experimentID uuid.UUID) ([]*storage.ExperimentRun, error) { return nil, nil }
-func (m *mockStorage) CreateAnalysisResult(ctx context.Context, result *storage.AnalysisResult) error     { return nil }
-func (m *mockStorage) GetAnalysisResults(ctx context.Context, experimentID uuid.UUID) ([]*storage.AnalysisResult, error) { return nil, nil }
-func (m *mockStorage) CreateEvaluator(ctx context.Context, evaluator *storage.Evaluator) error            { return nil }
-func (m *mockStorage) GetEvaluator(ctx context.Context, id int) (*storage.Evaluator, error)               { return nil, nil }
-func (m *mockStorage) GetEvaluatorByName(ctx context.Context, name string) (*storage.Evaluator, error)    { return nil, nil }
-func (m *mockStorage) UpdateEvaluator(ctx context.Context, evaluator *storage.Evaluator) error            { return nil }
-func (m *mockStorage) ListEvaluators(ctx context.Context, enabledOnly bool) ([]*storage.Evaluator, error) { return nil, nil }
-func (m *mockStorage) DeleteEvaluator(ctx context.Context, id int) error                                  { return nil }
-func (m *mockStorage) CreateEvaluationRun(ctx context.Context, run *storage.EvaluationRun) error          { return nil }
-func (m *mockStorage) GetEvaluationRun(ctx context.Context, id uuid.UUID) (*storage.EvaluationRun, error) { return nil, nil }
-func (m *mockStorage) UpdateEvaluationRun(ctx context.Context, run *storage.EvaluationRun) error          { return nil }
-func (m *mockStorage) CreateEvaluatorResult(ctx context.Context, result *storage.EvaluatorResult) error   { return nil }
-func (m *mockStorage) GetEvaluatorResults(ctx context.Context, evaluationRunID uuid.UUID) ([]*storage.EvaluatorResult, error) { return nil, nil }
-func (m *mockStorage) CreateHumanEvaluation(ctx context.Context, eval *storage.HumanEvaluation) error     { return nil }
-func (m *mockStorage) GetHumanEvaluation(ctx context.Context, id uuid.UUID) (*storage.HumanEvaluation, error) { return nil, nil }
-func (m *mockStorage) UpdateHumanEvaluation(ctx context.Context, eval *storage.HumanEvaluation) error     { return nil }
-func (m *mockStorage) ListPendingHumanEvaluations(ctx context.Context, assignedTo *string) ([]*storage.HumanEvaluation, error) { return nil, nil }
-func (m *mockStorage) CreateGroundTruth(ctx context.Context, gt *storage.GroundTruth) error               { return nil }
-func (m *mockStorage) GetGroundTruth(ctx context.Context, taskID string) (*storage.GroundTruth, error)    { return nil, nil }
-func (m *mockStorage) UpdateGroundTruth(ctx context.Context, gt *storage.GroundTruth) error               { return nil }
-func (m *mockStorage) ListGroundTruth(ctx context.Context, taskType *string) ([]*storage.GroundTruth, error) { return nil, nil }
-func (m *mockStorage) DeleteGroundTruth(ctx context.Context, taskID string) error                         { return nil }
-func (m *mockStorage) CreateEvaluationSummary(ctx context.Context, summary *storage.EvaluationSummary) error { return nil }
-func (m *mockStorage) GetEvaluationSummary(ctx context.Context, experimentID uuid.UUID) ([]*storage.EvaluationSummary, error) { return nil, nil }
-func (m *mockStorage) MarkTraceAsBaseline(ctx context.Context, baseline *storage.Baseline) error   { return nil }
-func (m *mockStorage) GetBaseline(ctx context.Context, traceID string) (*storage.Baseline, error)  { return nil, nil }
-func (m *mockStorage) ListBaselines(ctx context.Context) ([]*storage.Baseline, error)              { return nil, nil }
-func (m *mockStorage) UnmarkBaseline(ctx context.Context, traceID string) error                    { return nil }
-func (m *mockStorage) CreateDriftResult(ctx context.Context, result *storage.DriftResult) error     { return nil }
-func (m *mockStorage) GetDriftResults(ctx context.Context, traceID string) ([]*storage.DriftResult, error) { return nil, nil }
-func (m *mockStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string) ([]*storage.DriftResult, error) { return nil, nil }
-func (m *mockStorage) GetLatestDriftResult(ctx context.Context, traceID string) (*storage.DriftResult, error) { return nil, nil }
+func (m *mockStorage) Close() error                      { return nil }
+func (m *mockStorage) Ping(ctx context.Context) error    { return nil }
+func (m *mockStorage) Migrate(ctx context.Context) error { return nil }
+func (m *mockStorage) GetOTELTraceSpans(ctx context.Context, traceID string) ([]*storage.OTELTrace, error) {
+	return nil, nil
+}
+func (m *mockStorage) GetReplayTraceSpans(ctx context.Context, traceID string) ([]*storage.ReplayTrace, error) {
+	return nil, nil
+}
+func (m *mockStorage) ListReplayTraces(ctx context.Context, filters storage.TraceFilters) ([]*storage.ReplayTrace, error) {
+	return nil, nil
+}
+func (m *mockStorage) GetToolCapturesByTrace(ctx context.Context, traceID string) ([]*storage.ToolCapture, error) {
+	return nil, nil
+}
+func (m *mockStorage) GetToolCaptureByArgs(ctx context.Context, toolName string, argsHash string) (*storage.ToolCapture, error) {
+	return nil, nil
+}
+func (m *mockStorage) CreateExperiment(ctx context.Context, exp *storage.Experiment) error {
+	return nil
+}
+func (m *mockStorage) GetExperiment(ctx context.Context, id uuid.UUID) (*storage.Experiment, error) {
+	return nil, nil
+}
+func (m *mockStorage) UpdateExperiment(ctx context.Context, exp *storage.Experiment) error {
+	return nil
+}
+func (m *mockStorage) ListExperiments(ctx context.Context, filters storage.ExperimentFilters) ([]*storage.Experiment, error) {
+	return nil, nil
+}
+func (m *mockStorage) CreateExperimentRun(ctx context.Context, run *storage.ExperimentRun) error {
+	return nil
+}
+func (m *mockStorage) GetExperimentRun(ctx context.Context, id uuid.UUID) (*storage.ExperimentRun, error) {
+	return nil, nil
+}
+func (m *mockStorage) UpdateExperimentRun(ctx context.Context, run *storage.ExperimentRun) error {
+	return nil
+}
+func (m *mockStorage) ListExperimentRuns(ctx context.Context, experimentID uuid.UUID) ([]*storage.ExperimentRun, error) {
+	return nil, nil
+}
+func (m *mockStorage) CreateAnalysisResult(ctx context.Context, result *storage.AnalysisResult) error {
+	return nil
+}
+func (m *mockStorage) GetAnalysisResults(ctx context.Context, experimentID uuid.UUID) ([]*storage.AnalysisResult, error) {
+	return nil, nil
+}
+func (m *mockStorage) CreateEvaluator(ctx context.Context, evaluator *storage.Evaluator) error {
+	return nil
+}
+func (m *mockStorage) GetEvaluator(ctx context.Context, id int) (*storage.Evaluator, error) {
+	return nil, nil
+}
+func (m *mockStorage) GetEvaluatorByName(ctx context.Context, name string) (*storage.Evaluator, error) {
+	return nil, nil
+}
+func (m *mockStorage) UpdateEvaluator(ctx context.Context, evaluator *storage.Evaluator) error {
+	return nil
+}
+func (m *mockStorage) ListEvaluators(ctx context.Context, enabledOnly bool) ([]*storage.Evaluator, error) {
+	return nil, nil
+}
+func (m *mockStorage) DeleteEvaluator(ctx context.Context, id int) error { return nil }
+func (m *mockStorage) CreateEvaluationRun(ctx context.Context, run *storage.EvaluationRun) error {
+	return nil
+}
+func (m *mockStorage) GetEvaluationRun(ctx context.Context, id uuid.UUID) (*storage.EvaluationRun, error) {
+	return nil, nil
+}
+func (m *mockStorage) UpdateEvaluationRun(ctx context.Context, run *storage.EvaluationRun) error {
+	return nil
+}
+func (m *mockStorage) CreateEvaluatorResult(ctx context.Context, result *storage.EvaluatorResult) error {
+	return nil
+}
+func (m *mockStorage) GetEvaluatorResults(ctx context.Context, evaluationRunID uuid.UUID) ([]*storage.EvaluatorResult, error) {
+	return nil, nil
+}
+func (m *mockStorage) CreateHumanEvaluation(ctx context.Context, eval *storage.HumanEvaluation) error {
+	return nil
+}
+func (m *mockStorage) GetHumanEvaluation(ctx context.Context, id uuid.UUID) (*storage.HumanEvaluation, error) {
+	return nil, nil
+}
+func (m *mockStorage) UpdateHumanEvaluation(ctx context.Context, eval *storage.HumanEvaluation) error {
+	return nil
+}
+func (m *mockStorage) ListPendingHumanEvaluations(ctx context.Context, assignedTo *string) ([]*storage.HumanEvaluation, error) {
+	return nil, nil
+}
+func (m *mockStorage) CreateGroundTruth(ctx context.Context, gt *storage.GroundTruth) error {
+	return nil
+}
+func (m *mockStorage) GetGroundTruth(ctx context.Context, taskID string) (*storage.GroundTruth, error) {
+	return nil, nil
+}
+func (m *mockStorage) UpdateGroundTruth(ctx context.Context, gt *storage.GroundTruth) error {
+	return nil
+}
+func (m *mockStorage) ListGroundTruth(ctx context.Context, taskType *string) ([]*storage.GroundTruth, error) {
+	return nil, nil
+}
+func (m *mockStorage) DeleteGroundTruth(ctx context.Context, taskID string) error { return nil }
+func (m *mockStorage) CreateEvaluationSummary(ctx context.Context, summary *storage.EvaluationSummary) error {
+	return nil
+}
+func (m *mockStorage) GetEvaluationSummary(ctx context.Context, experimentID uuid.UUID) ([]*storage.EvaluationSummary, error) {
+	return nil, nil
+}
+func (m *mockStorage) MarkTraceAsBaseline(ctx context.Context, baseline *storage.Baseline) error {
+	return nil
+}
+func (m *mockStorage) GetBaseline(ctx context.Context, traceID string) (*storage.Baseline, error) {
+	return nil, nil
+}
+func (m *mockStorage) ListBaselines(ctx context.Context) ([]*storage.Baseline, error) {
+	return nil, nil
+}
+func (m *mockStorage) UnmarkBaseline(ctx context.Context, traceID string) error { return nil }
+func (m *mockStorage) CreateDriftResult(ctx context.Context, result *storage.DriftResult) error {
+	return nil
+}
+func (m *mockStorage) GetDriftResults(ctx context.Context, traceID string) ([]*storage.DriftResult, error) {
+	return nil, nil
+}
+func (m *mockStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string) ([]*storage.DriftResult, error) {
+	return nil, nil
+}
+func (m *mockStorage) GetLatestDriftResult(ctx context.Context, traceID string) (*storage.DriftResult, error) {
+	return nil, nil
+}
 
 // Batch operations
 func (m *mockStorage) CreateIngestionBatch(ctx context.Context, otels []*storage.OTELTrace, replays []*storage.ReplayTrace, tools []*storage.ToolCapture) (storage.IngestCounts, error) {
@@ -229,4 +316,77 @@ func TestCalculateArgsHash_Deterministic(t *testing.T) {
 		assert.Equal(t, hash, calculateArgsHash(args2))
 		assert.NotEmpty(t, hash)
 	})
+}
+
+func TestReceiverHandleHTTPTraces_JSON(t *testing.T) {
+	log, _ := logger.New("debug")
+	mock := &mockStorage{}
+	receiver, err := NewReceiver(Config{}, mock, log)
+	require.NoError(t, err)
+
+	traces := buildHTTPTestTraces()
+	body, err := (&ptrace.JSONMarshaler{}).MarshalTraces(traces)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	receiver.handleHTTPTraces(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Len(t, mock.otelTraces, 1)
+}
+
+func TestReceiverHandleHTTPTraces_Protobuf(t *testing.T) {
+	log, _ := logger.New("debug")
+	mock := &mockStorage{}
+	receiver, err := NewReceiver(Config{}, mock, log)
+	require.NoError(t, err)
+
+	traces := buildHTTPTestTraces()
+	body, err := (&ptrace.ProtoMarshaler{}).MarshalTraces(traces)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	rr := httptest.NewRecorder()
+
+	receiver.handleHTTPTraces(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Len(t, mock.otelTraces, 1)
+}
+
+func TestReceiverHandleHTTPTraces_UnsupportedContentType(t *testing.T) {
+	log, _ := logger.New("debug")
+	mock := &mockStorage{}
+	receiver, err := NewReceiver(Config{}, mock, log)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewBufferString("invalid"))
+	req.Header.Set("Content-Type", "text/plain")
+	rr := httptest.NewRecorder()
+
+	receiver.handleHTTPTraces(rr, req)
+
+	assert.Equal(t, http.StatusUnsupportedMediaType, rr.Code)
+	assert.Len(t, mock.otelTraces, 0)
+}
+
+func buildHTTPTestTraces() ptrace.Traces {
+	traces := ptrace.NewTraces()
+	rs := traces.ResourceSpans().AppendEmpty()
+	rs.Resource().Attributes().PutStr("service.name", "receiver-http-test")
+
+	ss := rs.ScopeSpans().AppendEmpty()
+	span := ss.Spans().AppendEmpty()
+
+	span.SetTraceID(pcommon.TraceID([16]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}))
+	span.SetSpanID(pcommon.SpanID([8]byte{2, 2, 2, 2, 2, 2, 2, 2}))
+	span.SetName("test-span")
+	span.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+	span.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Now().Add(10 * time.Millisecond)))
+
+	return traces
 }

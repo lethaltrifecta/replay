@@ -68,7 +68,7 @@ build: ## Build the binary
 run: build ## Build and run the service
 	@echo "Running $(BINARY_NAME)..."
 	@if [ ! -f .env ]; then echo "⚠️  Warning: .env file not found. Copy .env.example to .env"; fi
-	@export $$(cat .env | grep -v '^#' | xargs) && $(BUILD_DIR)/$(BINARY_NAME) serve
+	@set -a; [ -f .env ] && . ./.env; set +a; $(BUILD_DIR)/$(BINARY_NAME) serve
 
 # ============================================================================
 # Testing
@@ -77,13 +77,13 @@ run: build ## Build and run the service
 test: ## Run unit tests
 	@echo "Running unit tests..."
 	@if [ ! -f .env ]; then echo "⚠️  Warning: .env file not found for test config"; fi
-	@export $$(cat .env 2>/dev/null | grep -v '^#' | xargs) || true
-	$(GOTEST) -v -race -coverprofile=coverage.out ./pkg/...
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	TEST_PKGS=$$(go list -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./pkg/... | xargs); \
+	$(GOTEST) -v -race -coverprofile=coverage.out $$TEST_PKGS
 
 test-storage: dev-up ## Run storage tests with real PostgreSQL
 	@echo "Running storage tests..."
-	@export CMDR_POSTGRES_URL=postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable
-	$(GOTEST) -v ./pkg/storage/...
+	@CMDR_POSTGRES_URL=postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable $(GOTEST) -v ./pkg/storage/...
 
 test-integration: ## Run integration tests
 	@echo "Running integration tests..."

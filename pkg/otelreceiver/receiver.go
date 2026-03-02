@@ -2,10 +2,12 @@ package otelreceiver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/ptrace"
@@ -15,6 +17,8 @@ import (
 	"github.com/lethaltrifecta/replay/pkg/storage"
 	"github.com/lethaltrifecta/replay/pkg/utils/logger"
 )
+
+var errUnsupportedContentType = errors.New("unsupported content type")
 
 // Receiver handles OTLP trace ingestion
 type Receiver struct {
@@ -153,10 +157,14 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 
 	r.logger.Debug("Received trace data", "size_bytes", len(body))
 
-	// Unmarshal using ptrace JSON unmarshaler
-	unmarshaler := &ptrace.JSONUnmarshaler{}
-	traces, err := unmarshaler.UnmarshalTraces(body)
+	traces, err := unmarshalHTTPTraces(req.Header.Get("Content-Type"), body)
 	if err != nil {
+		if errors.Is(err, errUnsupportedContentType) {
+			r.logger.Error("Unsupported OTLP HTTP content type", "content_type", req.Header.Get("Content-Type"))
+			http.Error(w, "Unsupported Content-Type", http.StatusUnsupportedMediaType)
+			return
+		}
+
 		r.logger.Error("Failed to unmarshal HTTP traces", "error", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -175,6 +183,45 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("{}"))
+}
+
+// unmarshalHTTPTraces unmarshals OTLP traces from HTTP request payloads.
+// Supports OTLP JSON and OTLP protobuf based on Content-Type.
+func unmarshalHTTPTraces(contentType string, body []byte) (ptrace.Traces, error) {
+	mediaType := baseContentType(contentType)
+
+	switch mediaType {
+	case "application/json":
+		unmarshaler := &ptrace.JSONUnmarshaler{}
+		return unmarshaler.UnmarshalTraces(body)
+	case "application/x-protobuf", "application/protobuf", "application/octet-stream":
+		unmarshaler := &ptrace.ProtoUnmarshaler{}
+		return unmarshaler.UnmarshalTraces(body)
+	case "":
+		// Fallback for clients that omit Content-Type.
+		protoUnmarshaler := &ptrace.ProtoUnmarshaler{}
+		if traces, err := protoUnmarshaler.UnmarshalTraces(body); err == nil {
+			return traces, nil
+		}
+
+		jsonUnmarshaler := &ptrace.JSONUnmarshaler{}
+		return jsonUnmarshaler.UnmarshalTraces(body)
+	default:
+		return ptrace.Traces{}, fmt.Errorf("%w: %s", errUnsupportedContentType, mediaType)
+	}
+}
+
+func baseContentType(contentType string) string {
+	contentType = strings.TrimSpace(strings.ToLower(contentType))
+	if contentType == "" {
+		return ""
+	}
+
+	if idx := strings.Index(contentType, ";"); idx >= 0 {
+		return strings.TrimSpace(contentType[:idx])
+	}
+
+	return contentType
 }
 
 // processTraces processes incoming traces and stores them

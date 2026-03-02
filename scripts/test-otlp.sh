@@ -7,8 +7,8 @@ set -e
 echo "🧪 Testing OTLP Receiver..."
 echo ""
 
-# Check if CMDR is running
-if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then
+# Check if CMDR is running (OTLP HTTP receiver health endpoint)
+if ! curl -s http://localhost:4318/health > /dev/null 2>&1; then
     echo "⚠️  CMDR service not running. Start it with: make run"
     echo "   (In another terminal)"
     echo ""
