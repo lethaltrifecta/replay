@@ -2,8 +2,10 @@ package storage
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Baseline methods
@@ -14,7 +16,7 @@ import (
 func (s *PostgresStorage) MarkTraceAsBaseline(ctx context.Context, baseline *Baseline) error {
 	// Validate trace exists
 	var exists bool
-	err := s.db.QueryRowContext(ctx,
+	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM replay_traces WHERE trace_id = $1)`,
 		baseline.TraceID,
 	).Scan(&exists)
@@ -34,7 +36,7 @@ func (s *PostgresStorage) MarkTraceAsBaseline(ctx context.Context, baseline *Bas
 		RETURNING id, created_at
 	`
 
-	return s.db.QueryRowContext(ctx, query,
+	return s.pool.QueryRow(ctx, query,
 		baseline.TraceID, baseline.Name, baseline.Description,
 	).Scan(&baseline.ID, &baseline.CreatedAt)
 }
@@ -48,11 +50,11 @@ func (s *PostgresStorage) GetBaseline(ctx context.Context, traceID string) (*Bas
 	`
 
 	var b Baseline
-	err := s.db.QueryRowContext(ctx, query, traceID).Scan(
+	err := s.pool.QueryRow(ctx, query, traceID).Scan(
 		&b.ID, &b.TraceID, &b.Name, &b.Description, &b.CreatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("baseline not found: %s", traceID)
 	}
 	if err != nil {
@@ -70,7 +72,7 @@ func (s *PostgresStorage) ListBaselines(ctx context.Context) ([]*Baseline, error
 		ORDER BY created_at DESC, id DESC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -92,18 +94,14 @@ func (s *PostgresStorage) ListBaselines(ctx context.Context) ([]*Baseline, error
 // UnmarkBaseline removes a baseline by trace ID.
 // Returns an error if no baseline exists for the given trace.
 func (s *PostgresStorage) UnmarkBaseline(ctx context.Context, traceID string) error {
-	result, err := s.db.ExecContext(ctx,
+	result, err := s.pool.Exec(ctx,
 		`DELETE FROM baselines WHERE trace_id = $1`, traceID,
 	)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rowsAffected == 0 {
+	if result.RowsAffected() == 0 {
 		return fmt.Errorf("baseline not found: %s", traceID)
 	}
 
@@ -128,7 +126,7 @@ func (s *PostgresStorage) CreateDriftResult(ctx context.Context, result *DriftRe
 		RETURNING id, created_at
 	`
 
-	return s.db.QueryRowContext(ctx, query,
+	return s.pool.QueryRow(ctx, query,
 		result.TraceID, result.BaselineTraceID, result.DriftScore, result.Verdict, result.Details,
 	).Scan(&result.ID, &result.CreatedAt)
 }
@@ -142,7 +140,7 @@ func (s *PostgresStorage) GetDriftResults(ctx context.Context, traceID string) (
 		ORDER BY created_at DESC, id DESC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, traceID)
+	rows, err := s.pool.Query(ctx, query, traceID)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +170,7 @@ func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselin
 		ORDER BY created_at DESC, id DESC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, baselineTraceID)
+	rows, err := s.pool.Query(ctx, query, baselineTraceID)
 	if err != nil {
 		return nil, err
 	}
@@ -204,11 +202,11 @@ func (s *PostgresStorage) GetLatestDriftResult(ctx context.Context, traceID stri
 	`
 
 	var r DriftResult
-	err := s.db.QueryRowContext(ctx, query, traceID).Scan(
+	err := s.pool.QueryRow(ctx, query, traceID).Scan(
 		&r.ID, &r.TraceID, &r.BaselineTraceID, &r.DriftScore, &r.Verdict, &r.Details, &r.CreatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("no drift results found for trace: %s", traceID)
 	}
 	if err != nil {

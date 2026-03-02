@@ -51,7 +51,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	)
 
 	// Initialize database
-	store, err := storage.NewPostgresStorage(cfg.PostgresURL, cfg.PostgresMaxConn)
+	store, err := storage.NewPostgresStorage(ctx, cfg.PostgresURL, cfg.PostgresMaxConn)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}

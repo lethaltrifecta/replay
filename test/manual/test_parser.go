@@ -98,15 +98,14 @@ func main() {
 	fmt.Println("\n Testing with database...")
 	dbURL := "postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable"
 
-	store, err := storage.NewPostgresStorage(dbURL, 10)
+	ctx := context.Background()
+	store, err := storage.NewPostgresStorage(ctx, dbURL, 10)
 	if err != nil {
 		fmt.Printf("  ⚠️  Could not connect to database: %v\n", err)
 		fmt.Println("  Run: make dev-up")
 		return
 	}
 	defer store.Close()
-
-	ctx := context.Background()
 
 	// Store replay trace
 	if err := store.CreateReplayTrace(ctx, replayTrace); err != nil {

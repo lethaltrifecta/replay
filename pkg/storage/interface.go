@@ -21,6 +21,9 @@ type Storage interface {
 	GetReplayTraceSpans(ctx context.Context, traceID string) ([]*ReplayTrace, error)
 	ListReplayTraces(ctx context.Context, filters TraceFilters) ([]*ReplayTrace, error)
 
+	// Atomic ingestion batch — all three tables in a single transaction
+	CreateIngestionBatch(ctx context.Context, otels []*OTELTrace, replays []*ReplayTrace, tools []*ToolCapture) (IngestCounts, error)
+
 	// Tool Captures (for Freeze-Tools)
 	CreateToolCapture(ctx context.Context, capture *ToolCapture) error
 	GetToolCapturesByTrace(ctx context.Context, traceID string) ([]*ToolCapture, error)
@@ -91,19 +94,19 @@ type Storage interface {
 
 // TraceFilters for filtering trace queries
 type TraceFilters struct {
-	Model      *string
-	Provider   *string
-	StartTime  *time.Time
-	EndTime    *time.Time
-	Limit      int
-	Offset     int
+	Model     *string
+	Provider  *string
+	StartTime *time.Time
+	EndTime   *time.Time
+	Limit     int
+	Offset    int
 }
 
 // ExperimentFilters for filtering experiment queries
 type ExperimentFilters struct {
-	Status     *string
-	StartTime  *time.Time
-	EndTime    *time.Time
-	Limit      int
-	Offset     int
+	Status    *string
+	StartTime *time.Time
+	EndTime   *time.Time
+	Limit     int
+	Offset    int
 }
