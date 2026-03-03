@@ -123,12 +123,19 @@ func (s *PostgresStorage) CreateDriftResult(ctx context.Context, result *DriftRe
 	query := `
 		INSERT INTO drift_results (trace_id, baseline_trace_id, drift_score, verdict, details)
 		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (trace_id, baseline_trace_id) DO NOTHING
 		RETURNING id, created_at
 	`
 
-	return s.pool.QueryRow(ctx, query,
+	err := s.pool.QueryRow(ctx, query,
 		result.TraceID, result.BaselineTraceID, result.DriftScore, result.Verdict, result.Details,
 	).Scan(&result.ID, &result.CreatedAt)
+
+	// ON CONFLICT DO NOTHING returns no rows — treat duplicate as success
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	return err
 }
 
 // GetDriftResults retrieves all drift results for a trace ID (newest first).
@@ -161,8 +168,9 @@ func (s *PostgresStorage) GetDriftResults(ctx context.Context, traceID string) (
 	return results, rows.Err()
 }
 
-// GetDriftResultsByBaseline retrieves all drift results for a baseline trace ID (newest first).
-func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string) ([]*DriftResult, error) {
+// GetDriftResultsByBaseline retrieves drift results for a baseline trace ID (newest first).
+// When limit > 0, at most limit rows are returned. When limit is 0, all rows are returned.
+func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string, limit int) ([]*DriftResult, error) {
 	query := `
 		SELECT id, trace_id, baseline_trace_id, drift_score, verdict, details, created_at
 		FROM drift_results
@@ -170,7 +178,13 @@ func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselin
 		ORDER BY created_at DESC, id DESC
 	`
 
-	rows, err := s.pool.Query(ctx, query, baselineTraceID)
+	args := []interface{}{baselineTraceID}
+	if limit > 0 {
+		query += " LIMIT $2"
+		args = append(args, limit)
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -192,15 +206,21 @@ func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselin
 }
 
 // ListDriftResults returns the most recent drift results across all traces.
+// When limit > 0, at most limit rows are returned. When limit is 0, all rows are returned.
 func (s *PostgresStorage) ListDriftResults(ctx context.Context, limit int) ([]*DriftResult, error) {
 	query := `
 		SELECT id, trace_id, baseline_trace_id, drift_score, verdict, details, created_at
 		FROM drift_results
 		ORDER BY created_at DESC, id DESC
-		LIMIT $1
 	`
 
-	rows, err := s.pool.Query(ctx, query, limit)
+	var args []interface{}
+	if limit > 0 {
+		query += " LIMIT $1"
+		args = append(args, limit)
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

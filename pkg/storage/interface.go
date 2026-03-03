@@ -88,7 +88,7 @@ type Storage interface {
 	// Drift Results
 	CreateDriftResult(ctx context.Context, result *DriftResult) error
 	GetDriftResults(ctx context.Context, traceID string) ([]*DriftResult, error)
-	GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string) ([]*DriftResult, error)
+	GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string, limit int) ([]*DriftResult, error)
 	GetLatestDriftResult(ctx context.Context, traceID string) (*DriftResult, error)
 	ListDriftResults(ctx context.Context, limit int) ([]*DriftResult, error)
 	HasDriftResultForBaseline(ctx context.Context, traceID string, baselineTraceID string) (bool, error)
@@ -102,6 +102,7 @@ type TraceFilters struct {
 	EndTime   *time.Time
 	Limit     int
 	Offset    int
+	SortAsc   bool // when true, ORDER BY created_at ASC instead of DESC
 }
 
 // ExperimentFilters for filtering experiment queries

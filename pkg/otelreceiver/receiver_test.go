@@ -84,7 +84,7 @@ func (m *mockStorage) ListBaselines(ctx context.Context) ([]*storage.Baseline, e
 func (m *mockStorage) UnmarkBaseline(ctx context.Context, traceID string) error                    { return nil }
 func (m *mockStorage) CreateDriftResult(ctx context.Context, result *storage.DriftResult) error     { return nil }
 func (m *mockStorage) GetDriftResults(ctx context.Context, traceID string) ([]*storage.DriftResult, error) { return nil, nil }
-func (m *mockStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string) ([]*storage.DriftResult, error) { return nil, nil }
+func (m *mockStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string, limit int) ([]*storage.DriftResult, error) { return nil, nil }
 func (m *mockStorage) GetLatestDriftResult(ctx context.Context, traceID string) (*storage.DriftResult, error) { return nil, nil }
 func (m *mockStorage) ListDriftResults(ctx context.Context, limit int) ([]*storage.DriftResult, error) { return nil, nil }
 func (m *mockStorage) HasDriftResultForBaseline(ctx context.Context, traceID string, baselineTraceID string) (bool, error) { return false, nil }

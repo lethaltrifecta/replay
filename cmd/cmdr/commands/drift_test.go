@@ -203,7 +203,7 @@ func (m *mockStore) UnmarkBaseline(_ context.Context, _ string) error           
 func (m *mockStore) GetDriftResults(_ context.Context, _ string) ([]*storage.DriftResult, error) {
 	return nil, nil
 }
-func (m *mockStore) GetDriftResultsByBaseline(_ context.Context, _ string) ([]*storage.DriftResult, error) {
+func (m *mockStore) GetDriftResultsByBaseline(_ context.Context, _ string, _ int) ([]*storage.DriftResult, error) {
 	return nil, nil
 }
 func (m *mockStore) GetLatestDriftResult(_ context.Context, _ string) (*storage.DriftResult, error) {
@@ -310,10 +310,10 @@ func TestPollAndCheck_HighWaterMark(t *testing.T) {
 	store := newMockStore()
 	t1 := time.Now().Add(-2 * time.Minute)
 	t2 := time.Now().Add(-1 * time.Minute)
-	// DESC order: newest first
+	// ASC order: oldest first (matches poll's SortAsc: true)
 	store.replayTraces = []*storage.ReplayTrace{
-		makeSpan("trace-2", t2),
 		makeSpan("trace-1", t1),
+		makeSpan("trace-2", t2),
 	}
 	// Both already checked so nothing to process — just testing cursor
 	store.driftResultsExist["trace-1:baseline-1"] = true
@@ -327,7 +327,7 @@ func TestPollAndCheck_HighWaterMark(t *testing.T) {
 	result := pollAndCheck(ctx, nil, store, "baseline-1", baselineFP, cfg, time.Now().Add(-5*time.Minute), retries)
 
 	assert.NoError(t, result.err)
-	assert.Equal(t, t2, result.highWater, "highWater should be the newest span's created_at")
+	assert.Equal(t, t2, result.highWater, "highWater should be the newest span's created_at (last in ASC order)")
 }
 
 func TestPollAndCheck_ContextCancellation(t *testing.T) {
@@ -439,10 +439,10 @@ func TestPollAndCheck_ListTracesError(t *testing.T) {
 func TestPollAndCheck_Overflow(t *testing.T) {
 	store := newMockStore()
 	now := time.Now()
-	// Simulate hitting the row limit
+	// Simulate hitting the row limit in ASC order (oldest first)
 	spans := make([]*storage.ReplayTrace, maxPollRows)
 	for i := range spans {
-		spans[i] = makeSpan(fmt.Sprintf("trace-%d", i), now.Add(-time.Duration(i)*time.Second))
+		spans[i] = makeSpan(fmt.Sprintf("trace-%d", i), now.Add(time.Duration(i)*time.Second))
 		// Mark all as already checked so we don't need to process
 		store.driftResultsExist[fmt.Sprintf("trace-%d:baseline-1", i)] = true
 	}
@@ -457,10 +457,10 @@ func TestPollAndCheck_Overflow(t *testing.T) {
 
 	assert.NoError(t, result.err)
 	assert.True(t, result.overflow, "should report overflow when hitting maxPollRows")
-	// On overflow, highWater should be the OLDEST row (last in DESC order),
-	// not the newest, so the next poll re-enters the truncated window.
-	oldestSpan := spans[len(spans)-1]
-	assert.Equal(t, oldestSpan.CreatedAt, result.highWater, "overflow should hold cursor at oldest row")
+	// With ASC order, highWater is the NEWEST row (last in ASC batch).
+	// Next poll picks up where we left off instead of getting stuck.
+	newestSpan := spans[len(spans)-1]
+	assert.Equal(t, newestSpan.CreatedAt, result.highWater, "overflow should advance cursor to newest row in batch")
 }
 
 func TestPollAndCheck_RetryBypassGuard(t *testing.T) {

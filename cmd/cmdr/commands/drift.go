@@ -315,18 +315,11 @@ func runDriftStatus(cmd *cobra.Command, args []string) error {
 
 	var results []*storage.DriftResult
 	if baselineFlag != "" {
-		results, err = store.GetDriftResultsByBaseline(ctx, baselineFlag)
+		results, err = store.GetDriftResultsByBaseline(ctx, baselineFlag, limit)
 		if err != nil {
 			return fmt.Errorf("failed to get drift results: %w", err)
 		}
-		// Apply --limit to baseline-filtered results too
-		if limit > 0 && len(results) > limit {
-			results = results[:limit]
-		}
 	} else {
-		if limit <= 0 {
-			limit = 20
-		}
 		results, err = store.ListDriftResults(ctx, limit)
 		if err != nil {
 			return fmt.Errorf("failed to list drift results: %w", err)
@@ -412,7 +405,19 @@ func runDriftWatch(cmd *cobra.Command, args []string) error {
 	cmd.Printf("Watching for new traces (baseline: %s, interval: %s)...\n", baselineTraceID, interval)
 
 	cfg := drift.DefaultConfig()
-	lastPoll := time.Now()
+
+	// Seed cursor from DB: use the newest replay_traces.created_at so we
+	// don't skip traces if the Go clock is ahead of the DB clock.
+	// Zero time if no rows exist — first poll catches everything (capped by maxPollRows).
+	var lastPoll time.Time
+	seedRows, err := store.ListReplayTraces(ctx, storage.TraceFilters{Limit: 1})
+	if err != nil {
+		return fmt.Errorf("failed to seed poll cursor: %w", err)
+	}
+	if len(seedRows) > 0 {
+		lastPoll = seedRows[0].CreatedAt
+	}
+
 	retryTraces := make(map[string]int) // trace_id -> attempt count
 
 	ticker := time.NewTicker(interval)
@@ -483,6 +488,7 @@ func pollAndCheck(ctx context.Context, cmd *cobra.Command, store storage.Storage
 	filters := storage.TraceFilters{
 		StartTime: &since,
 		Limit:     maxPollRows,
+		SortAsc:   true,
 	}
 	spans, err := store.ListReplayTraces(ctx, filters)
 	if err != nil {
@@ -491,18 +497,13 @@ func pollAndCheck(ctx context.Context, cmd *cobra.Command, store storage.Storage
 
 	overflow := len(spans) >= maxPollRows
 
-	// Compute the cursor for the next poll.
-	// ListReplayTraces returns DESC order, so spans[0] is newest and
-	// spans[len-1] is oldest. On overflow, hold the cursor at the oldest
-	// returned row so the next poll re-enters the truncated window.
-	// On a normal (non-overflow) poll, advance to the newest row.
+	// With ASC order, spans[len-1] is the newest row in the batch.
+	// Advance cursor to it so the next poll picks up where we left off.
+	// On overflow this processes the oldest rows first; subsequent polls
+	// catch up incrementally instead of getting stuck on the same window.
 	var highWater time.Time
 	if len(spans) > 0 {
-		if overflow {
-			highWater = spans[len(spans)-1].CreatedAt
-		} else {
-			highWater = spans[0].CreatedAt
-		}
+		highWater = spans[len(spans)-1].CreatedAt
 	}
 
 	// Deduplicate by trace_id, preserving first-seen order
