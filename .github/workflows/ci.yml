@@ -33,7 +33,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.26'
+        go-version-file: go.mod
         cache: true
 
     - name: Download dependencies
@@ -41,7 +41,7 @@ jobs:
 
     - name: Run tests
       env:
-        CMDR_POSTGRES_URL: postgres://cmdr:test_password@localhost:5432/cmdr_test?sslmode=disable
+        CMDR_POSTGRES_URL: postgres://cmdr:test_password@127.0.0.1:5432/cmdr_test?sslmode=disable
         CMDR_AGENTGATEWAY_URL: http://localhost:8080
       run: make test
 
@@ -61,7 +61,7 @@ jobs:
         #    - name: Set up Go
         #      uses: actions/setup-go@v5
         #      with:
-        #        go-version: '1.26'
+        #        go-version-file: go.mod
         #        cache: true
         #
         #    - name: Run golangci-lint
@@ -80,7 +80,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.26'
+        go-version-file: go.mod
         cache: true
 
     - name: Build binary
