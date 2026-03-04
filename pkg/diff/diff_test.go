@@ -227,3 +227,162 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	assert.InDelta(t, 0.8, cfg.SimilarityThreshold, 0.001)
 }
+
+func makeTraceWithCompletion(stepIndex, totalTokens, latencyMS int, completion string) *storage.ReplayTrace {
+	return &storage.ReplayTrace{
+		StepIndex:   stepIndex,
+		TotalTokens: totalTokens,
+		LatencyMS:   latencyMS,
+		Completion:  completion,
+	}
+}
+
+func TestCompareAll(t *testing.T) {
+	baseline := []*storage.ReplayTrace{
+		makeTraceWithCompletion(0, 100, 200, "Get the user profile"),
+		makeTraceWithCompletion(1, 150, 300, "Update the record"),
+	}
+	variant := []*storage.ReplayTrace{
+		makeTraceWithCompletion(0, 110, 210, "Get the user profile"),
+		makeTraceWithCompletion(1, 140, 290, "Update the record"),
+	}
+
+	baselineCaptures := []*storage.ToolCapture{
+		{ToolName: "get_user", RiskClass: "read"},
+		{ToolName: "update_record", RiskClass: "write"},
+	}
+	variantTools := []ToolCall{
+		{Name: "get_user", RiskClass: "read"},
+		{Name: "update_record", RiskClass: "write"},
+	}
+
+	cfg := Config{SimilarityThreshold: 0.8}
+	report := CompareAll(CompareInput{
+		Baseline:      baseline,
+		Variant:       variant,
+		BaselineTools: baselineCaptures,
+		VariantTools:  variantTools,
+	}, cfg)
+
+	require.NotNil(t, report)
+	assert.Equal(t, "pass", report.Verdict)
+	assert.GreaterOrEqual(t, report.SimilarityScore, 0.8)
+	assert.LessOrEqual(t, report.SimilarityScore, 1.0)
+
+	// All semantic dimensions should be populated
+	require.NotNil(t, report.ToolCallScore)
+	assert.InDelta(t, 1.0, report.ToolCallScore.Score, 0.01)
+
+	require.NotNil(t, report.RiskScore)
+	assert.InDelta(t, 1.0, report.RiskScore.Score, 0.01)
+	assert.False(t, report.RiskScore.Escalation)
+
+	require.NotNil(t, report.ResponseScore)
+	assert.InDelta(t, 1.0, report.ResponseScore.Score, 0.01)
+}
+
+func TestCompareAll_NoTools(t *testing.T) {
+	baseline := []*storage.ReplayTrace{
+		makeTraceWithCompletion(0, 100, 200, "The quick brown fox jumps over the lazy dog"),
+		makeTraceWithCompletion(1, 150, 300, "Hello world this is a test response"),
+	}
+	variant := []*storage.ReplayTrace{
+		makeTraceWithCompletion(0, 110, 210, "The quick brown fox jumps over the lazy dog"),
+		makeTraceWithCompletion(1, 140, 290, "Hello world this is a test response"),
+	}
+
+	cfg := Config{SimilarityThreshold: 0.8}
+	report := CompareAll(CompareInput{
+		Baseline:      baseline,
+		Variant:       variant,
+		BaselineTools: nil,
+		VariantTools:  nil,
+	}, cfg)
+
+	require.NotNil(t, report)
+	assert.Equal(t, "pass", report.Verdict)
+	assert.GreaterOrEqual(t, report.SimilarityScore, 0.8)
+
+	// Tool dimensions should be nil (no tool data)
+	assert.Nil(t, report.ToolCallScore)
+	assert.Nil(t, report.RiskScore)
+
+	// Response score should still be populated
+	require.NotNil(t, report.ResponseScore)
+	assert.GreaterOrEqual(t, report.ResponseScore.Score, 0.9)
+}
+
+func TestCompareAll_WithEscalation(t *testing.T) {
+	baseline := []*storage.ReplayTrace{
+		makeTraceWithCompletion(0, 100, 200, "Read the file"),
+	}
+	variant := []*storage.ReplayTrace{
+		makeTraceWithCompletion(0, 100, 200, "Delete the file"),
+	}
+
+	baselineCaptures := []*storage.ToolCapture{
+		{ToolName: "read_file", RiskClass: "read"},
+	}
+	variantTools := []ToolCall{
+		{Name: "delete_file", RiskClass: "destructive"},
+	}
+
+	cfg := Config{SimilarityThreshold: 0.8}
+	report := CompareAll(CompareInput{
+		Baseline:      baseline,
+		Variant:       variant,
+		BaselineTools: baselineCaptures,
+		VariantTools:  variantTools,
+	}, cfg)
+
+	require.NotNil(t, report)
+	require.NotNil(t, report.RiskScore)
+	assert.True(t, report.RiskScore.Escalation)
+	assert.Less(t, report.RiskScore.Score, 1.0)
+}
+
+func TestToAnalysisResult_WithSemanticData(t *testing.T) {
+	report := &Report{
+		SimilarityScore: 0.85,
+		Verdict:         "pass",
+		StepCount:       2,
+		TokenDelta:      20,
+		LatencyDelta:    30,
+		ToolCallScore: &ToolCallScore{
+			SequenceSimilarity:  0.9,
+			FrequencySimilarity: 0.95,
+			Score:               0.925,
+		},
+		RiskScore: &RiskScore{
+			Score:      0.8,
+			Escalation: true,
+			Details: map[string]interface{}{
+				"baseline_fractions":  map[string]float64{"read": 1.0},
+				"candidate_fractions": map[string]float64{"write": 1.0},
+			},
+		},
+		ResponseScore: &ResponseScore{
+			LengthSimilarity: 0.9,
+			ContentOverlap:   0.75,
+			Score:            0.795,
+		},
+	}
+
+	experimentID := uuid.New()
+	baselineRunID := uuid.New()
+	candidateRunID := uuid.New()
+
+	result := ToAnalysisResult(report, experimentID, baselineRunID, candidateRunID)
+
+	require.NotNil(t, result)
+	assert.InDelta(t, 0.85, result.SimilarityScore, 0.001)
+
+	// SafetyDiff should be populated
+	assert.NotEmpty(t, result.SafetyDiff)
+	assert.Equal(t, true, result.SafetyDiff["escalation"])
+
+	// QualityMetrics should be populated
+	assert.NotEmpty(t, result.QualityMetrics)
+	assert.InDelta(t, 0.75, result.QualityMetrics["content_overlap"], 0.01)
+	assert.InDelta(t, 0.925, result.QualityMetrics["tool_call_score"], 0.01)
+}

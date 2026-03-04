@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lethaltrifecta/replay/pkg/diff"
+	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
 func TestGateCheck_ThresholdValidation(t *testing.T) {
@@ -180,4 +181,67 @@ func TestErrGateFailed_IsSentinel(t *testing.T) {
 	// Wrapped errors should still match
 	wrapped := errors.New("other error")
 	assert.False(t, errors.Is(wrapped, ErrGateFailed))
+}
+
+func TestResolveToolComparisonInputs_FallbackOnCaptureError(t *testing.T) {
+	cmd := &cobra.Command{}
+	errOut := &strings.Builder{}
+	cmd.SetErr(errOut)
+
+	captures, tools := resolveToolComparisonInputs(
+		cmd,
+		nil,
+		errors.New("db unavailable"),
+		[]*storage.ReplayTrace{
+			{
+				Metadata: storage.JSONB{
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"function": map[string]interface{}{
+								"name": "delete_user",
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	assert.Nil(t, captures)
+	assert.Nil(t, tools)
+	assert.Contains(t, errOut.String(), "falling back to 4-dimension structural+response diff")
+}
+
+func TestResolveToolComparisonInputs_UsesSemanticWhenCapturesLoad(t *testing.T) {
+	cmd := &cobra.Command{}
+	errOut := &strings.Builder{}
+	cmd.SetErr(errOut)
+
+	inputCaptures := []*storage.ToolCapture{
+		{ToolName: "get_user", RiskClass: "read"},
+	}
+	captures, tools := resolveToolComparisonInputs(
+		cmd,
+		inputCaptures,
+		nil,
+		[]*storage.ReplayTrace{
+			{
+				Metadata: storage.JSONB{
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"function": map[string]interface{}{
+								"name": "get_user",
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	require.Len(t, captures, 1)
+	assert.Equal(t, "get_user", captures[0].ToolName)
+	require.Len(t, tools, 1)
+	assert.Equal(t, "get_user", tools[0].Name)
+	assert.Empty(t, errOut.String())
 }

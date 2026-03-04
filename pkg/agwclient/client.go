@@ -25,10 +25,24 @@ type Client struct {
 	config     ClientConfig
 }
 
+// ToolCallResponse represents a tool call in an OpenAI-compatible API response.
+type ToolCallResponse struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall represents the function invocation within a tool call.
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // raw JSON string
+}
+
 // ChatMessage represents a single message in a chat conversation.
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string             `json:"role"`
+	Content   string             `json:"content"`
+	ToolCalls []ToolCallResponse `json:"tool_calls,omitempty"`
 }
 
 // CompletionRequest is the request body for the chat completions endpoint.

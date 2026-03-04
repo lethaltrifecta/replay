@@ -13,6 +13,7 @@ import (
 	"github.com/lethaltrifecta/replay/pkg/config"
 	"github.com/lethaltrifecta/replay/pkg/diff"
 	"github.com/lethaltrifecta/replay/pkg/replay"
+	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
 var gateCmd = &cobra.Command{
@@ -22,10 +23,10 @@ var gateCmd = &cobra.Command{
 }
 
 var gateCheckCmd = &cobra.Command{
-	Use:   "check",
-	Short: "Replay a baseline trace and diff the results",
-	Long:  `Sends each baseline prompt to a variant model via agentgateway, diffs the results, and produces a CI/CD-friendly exit code (0=pass, 1=fail).`,
-	RunE:  runGateCheck,
+	Use:          "check",
+	Short:        "Replay a baseline trace and diff the results",
+	Long:         `Sends each baseline prompt to a variant model via agentgateway, diffs the results, and produces a CI/CD-friendly exit code (0=pass, 1=fail).`,
+	RunE:         runGateCheck,
 	SilenceUsage: true, // Don't print usage on runtime errors
 }
 
@@ -109,9 +110,17 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reload variant: %w", err)
 	}
 
-	// Diff
+	captures, err := store.GetToolCapturesByTrace(ctx, baselineTraceID)
+	baselineCaptures, variantToolCalls := resolveToolComparisonInputs(cmd, captures, err, variantSteps)
+
+	// Diff (6-dimension when tool data available, 4-dimension fallback otherwise)
 	diffCfg := diff.Config{SimilarityThreshold: threshold}
-	report := diff.Compare(baselineSteps, variantSteps, diffCfg)
+	report := diff.CompareAll(diff.CompareInput{
+		Baseline:      baselineSteps,
+		Variant:       variantSteps,
+		BaselineTools: baselineCaptures,
+		VariantTools:  variantToolCalls,
+	}, diffCfg)
 
 	// Persist analysis result
 	analysisResult := diff.ToAnalysisResult(report, result.ExperimentID, result.BaselineRunID, result.VariantRunID)
@@ -127,6 +136,23 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// resolveToolComparisonInputs decides whether semantic tool dimensions can be used.
+// If baseline tool captures cannot be loaded, both sides are nil so CompareAll
+// falls back to 4-dimension structural+response scoring.
+func resolveToolComparisonInputs(
+	cmd *cobra.Command,
+	captures []*storage.ToolCapture,
+	captureErr error,
+	variantSteps []*storage.ReplayTrace,
+) ([]*storage.ToolCapture, []diff.ToolCall) {
+	if captureErr != nil {
+		cmd.PrintErrf("Warning: failed to load baseline tool captures, falling back to 4-dimension structural+response diff: %v\n", captureErr)
+		return nil, nil
+	}
+
+	return captures, diff.ExtractVariantToolCalls(variantSteps)
 }
 
 // ErrGateFailed is returned when the gate check verdict is "fail".
@@ -215,6 +241,24 @@ func printGateReport(cmd *cobra.Command, baselineTraceID, model string, experime
 	cmd.Printf("Similarity: %.4f\n", report.SimilarityScore)
 	cmd.Printf("Verdict:    %s\n", verdictDisplay(report.Verdict))
 
+	// Dimension breakdown
+	cmd.Printf("\nDimensions:\n")
+	if report.ToolCallScore != nil {
+		cmd.Printf("  tool_calls    %.2f  (seq=%.2f, freq=%.2f)\n",
+			report.ToolCallScore.Score, report.ToolCallScore.SequenceSimilarity, report.ToolCallScore.FrequencySimilarity)
+	}
+	if report.RiskScore != nil {
+		escalation := "no escalation"
+		if report.RiskScore.Escalation {
+			escalation = "ESCALATION"
+		}
+		cmd.Printf("  risk          %.2f  (%s)\n", report.RiskScore.Score, escalation)
+	}
+	if report.ResponseScore != nil {
+		cmd.Printf("  response      %.2f  (jaccard=%.2f, length=%.2f)\n",
+			report.ResponseScore.Score, report.ResponseScore.ContentOverlap, report.ResponseScore.LengthSimilarity)
+	}
+
 	if len(report.StepDiffs) > 0 {
 		cmd.Printf("\nStep Breakdown:\n")
 		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
@@ -228,4 +272,3 @@ func printGateReport(cmd *cobra.Command, baselineTraceID, model string, experime
 	cmd.Printf("\nTotals: token_delta=%+d  latency_delta=%+dms\n", report.TokenDelta, report.LatencyDelta)
 	cmd.Printf("Experiment: %s\n", experimentID)
 }
-

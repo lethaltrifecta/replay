@@ -34,6 +34,20 @@ type Report struct {
 	StepDiffs       []StepDiff `json:"step_diffs"`
 	TokenDelta      int        `json:"token_delta"`   // total (variant - baseline)
 	LatencyDelta    int        `json:"latency_delta"` // total ms (variant - baseline)
+
+	// Semantic dimensions (populated by CompareAll, nil when using Compare)
+	ToolCallScore    *ToolCallScore `json:"tool_call_score,omitempty"`
+	RiskScore        *RiskScore     `json:"risk_score,omitempty"`
+	ResponseScore    *ResponseScore `json:"response_score,omitempty"`
+	FirstDivergence  storage.JSONB  `json:"first_divergence,omitempty"`
+}
+
+// CompareInput holds all data needed for a full 6-dimension comparison.
+type CompareInput struct {
+	Baseline      []*storage.ReplayTrace
+	Variant       []*storage.ReplayTrace
+	BaselineTools []*storage.ToolCapture // from DB, may be nil
+	VariantTools  []ToolCall             // extracted from variant metadata, may be nil
 }
 
 // Dimension weights for similarity scoring
@@ -146,6 +160,166 @@ func latencySimilarity(a, b int) float64 {
 	return 1.0 - delta/float64(maxLatency)
 }
 
+// CompareAll computes a 6-dimension similarity report when tool data is available,
+// falling back to 4 dimensions (structural + response) when no tools are present.
+// The existing Compare() function is unchanged for backward compatibility.
+func CompareAll(input CompareInput, cfg Config) *Report {
+	baseline := input.Baseline
+	variant := input.Variant
+
+	// Structural metrics (same as Compare)
+	report := &Report{
+		StepCount: len(variant),
+	}
+
+	stepSim := stepCountSimilarity(len(baseline), len(variant))
+
+	minSteps := len(baseline)
+	if len(variant) < minSteps {
+		minSteps = len(variant)
+	}
+
+	var totalBaseTokens, totalVarTokens int
+	var totalBaseLatency, totalVarLatency int
+
+	for i := 0; i < minSteps; i++ {
+		tokenDelta := variant[i].TotalTokens - baseline[i].TotalTokens
+		report.StepDiffs = append(report.StepDiffs, StepDiff{
+			StepIndex:  i,
+			TokenDelta: tokenDelta,
+		})
+		totalBaseTokens += baseline[i].TotalTokens
+		totalVarTokens += variant[i].TotalTokens
+		totalBaseLatency += baseline[i].LatencyMS
+		totalVarLatency += variant[i].LatencyMS
+	}
+
+	for i := minSteps; i < len(baseline); i++ {
+		totalBaseTokens += baseline[i].TotalTokens
+		totalBaseLatency += baseline[i].LatencyMS
+	}
+	for i := minSteps; i < len(variant); i++ {
+		totalVarTokens += variant[i].TotalTokens
+		totalVarLatency += variant[i].LatencyMS
+		report.StepDiffs = append(report.StepDiffs, StepDiff{
+			StepIndex:  i,
+			TokenDelta: variant[i].TotalTokens,
+		})
+	}
+
+	report.TokenDelta = totalVarTokens - totalBaseTokens
+	report.LatencyDelta = totalVarLatency - totalBaseLatency
+
+	tokenSim := 1.0 - tokenDeltaScore(totalBaseTokens, totalVarTokens)
+	latencySim := latencySimilarity(totalBaseLatency, totalVarLatency)
+
+	// Semantic dimensions
+	baseTools := BaselineToolCalls(input.BaselineTools)
+	report.ToolCallScore = CompareToolCalls(baseTools, input.VariantTools)
+	report.RiskScore = CompareRiskProfiles(baseTools, input.VariantTools)
+	report.ResponseScore = CompareResponses(baseline, variant)
+
+	report.FirstDivergence = findFirstDivergence(baseline, variant, baseTools, input.VariantTools)
+
+	hasToolData := report.ToolCallScore != nil
+
+	if hasToolData {
+		// 6-dimension weights
+		report.SimilarityScore = 0.15*stepSim +
+			0.10*tokenSim +
+			0.10*latencySim +
+			0.25*report.ToolCallScore.Score +
+			0.20*report.RiskScore.Score +
+			0.20*safeResponseScore(report.ResponseScore)
+	} else {
+		// 4-dimension fallback (no tool data)
+		report.SimilarityScore = 0.25*stepSim +
+			0.15*tokenSim +
+			0.15*latencySim +
+			0.45*safeResponseScore(report.ResponseScore)
+	}
+
+	report.SimilarityScore = math.Max(0.0, math.Min(1.0, report.SimilarityScore))
+
+	if report.SimilarityScore >= cfg.SimilarityThreshold {
+		report.Verdict = "pass"
+	} else {
+		report.Verdict = "fail"
+	}
+
+	return report
+}
+
+// safeResponseScore returns the response score value, or 1.0 if nil.
+func safeResponseScore(rs *ResponseScore) float64 {
+	if rs == nil {
+		return 1.0
+	}
+	return rs.Score
+}
+
+// findFirstDivergence returns the first step index where tool sequences diverge
+// or where Jaccard content overlap < 0.5.
+func findFirstDivergence(baseline, variant []*storage.ReplayTrace, baseTools, varTools []ToolCall) storage.JSONB {
+	// Check tool sequence divergence.
+	// Note: tool_index is the position in the flat tool call list, not the replay step index.
+	baseNames := toolNames(baseTools)
+	varNames := toolNames(varTools)
+
+	if len(baseNames) > 0 || len(varNames) > 0 {
+		minLen := len(baseNames)
+		if len(varNames) < minLen {
+			minLen = len(varNames)
+		}
+		for i := 0; i < minLen; i++ {
+			if baseNames[i] != varNames[i] {
+				return storage.JSONB{
+					"tool_index": i,
+					"type":       "tool_sequence",
+					"baseline":   baseNames[i],
+					"variant":    varNames[i],
+				}
+			}
+		}
+		if len(baseNames) != len(varNames) {
+			return storage.JSONB{
+				"tool_index":     minLen,
+				"type":           "tool_count",
+				"baseline_count": len(baseNames),
+				"variant_count":  len(varNames),
+			}
+		}
+	}
+
+	// Check response content divergence
+	minSteps := len(baseline)
+	if len(variant) < minSteps {
+		minSteps = len(variant)
+	}
+	for i := 0; i < minSteps; i++ {
+		j := jaccard(baseline[i].Completion, variant[i].Completion)
+		if j < 0.5 {
+			return storage.JSONB{
+				"step_index": i,
+				"type":       "response_content",
+				"jaccard":    j,
+			}
+		}
+	}
+
+	// Report step count mismatch if overlapping completions were similar
+	if len(baseline) != len(variant) {
+		return storage.JSONB{
+			"step_index":     minSteps,
+			"type":           "step_count",
+			"baseline_steps": len(baseline),
+			"variant_steps":  len(variant),
+		}
+	}
+
+	return storage.JSONB{}
+}
+
 // ToAnalysisResult maps a Report into a storage.AnalysisResult for persistence.
 func ToAnalysisResult(report *Report, experimentID, baselineRunID, candidateRunID uuid.UUID) *storage.AnalysisResult {
 	behaviorDiff := storage.JSONB{
@@ -155,15 +329,41 @@ func ToAnalysisResult(report *Report, experimentID, baselineRunID, candidateRunI
 		"similarity_score": report.SimilarityScore,
 	}
 
+	safetyDiff := storage.JSONB{}
+	if report.RiskScore != nil {
+		safetyDiff = storage.JSONB{
+			"score":      report.RiskScore.Score,
+			"escalation": report.RiskScore.Escalation,
+			"details":    report.RiskScore.Details,
+		}
+	}
+
+	qualityMetrics := storage.JSONB{}
+	if report.ResponseScore != nil {
+		qualityMetrics["length_similarity"] = report.ResponseScore.LengthSimilarity
+		qualityMetrics["content_overlap"] = report.ResponseScore.ContentOverlap
+		qualityMetrics["response_score"] = report.ResponseScore.Score
+	}
+	if report.ToolCallScore != nil {
+		qualityMetrics["tool_sequence_similarity"] = report.ToolCallScore.SequenceSimilarity
+		qualityMetrics["tool_frequency_similarity"] = report.ToolCallScore.FrequencySimilarity
+		qualityMetrics["tool_call_score"] = report.ToolCallScore.Score
+	}
+
+	firstDivergence := storage.JSONB{}
+	if report.FirstDivergence != nil && len(report.FirstDivergence) > 0 {
+		firstDivergence = report.FirstDivergence
+	}
+
 	return &storage.AnalysisResult{
 		ExperimentID:    experimentID,
 		BaselineRunID:   baselineRunID,
 		CandidateRunID:  candidateRunID,
 		BehaviorDiff:    behaviorDiff,
-		FirstDivergence: storage.JSONB{},
-		SafetyDiff:      storage.JSONB{},
+		FirstDivergence: firstDivergence,
+		SafetyDiff:      safetyDiff,
 		SimilarityScore: report.SimilarityScore,
-		QualityMetrics:  storage.JSONB{},
+		QualityMetrics:  qualityMetrics,
 		TokenDelta:      report.TokenDelta,
 		CostDelta:       0,
 		LatencyDelta:    report.LatencyDelta,

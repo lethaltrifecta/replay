@@ -11,11 +11,11 @@ Implemented in this repo:
 - Tool capture extraction with deterministic args hashing + risk classification
 - Baseline management + drift scoring (fingerprint + comparison engine)
 - Drift CLI commands for baseline set/list/remove and trace drift checks
-- Deployment gate: replay baseline prompts with a variant model via agentgateway, diff results structurally, produce CI/CD pass/fail verdict
+- Deployment gate: replay baseline prompts with a variant model via agentgateway, diff results with structural + semantic scoring, produce CI/CD pass/fail verdict
+- Semantic diff: tool-call sequence/frequency comparison, risk escalation detection, response divergence (Jaccard + length)
 - Gate CLI commands for replay check and experiment reporting
 
 Planned but not implemented yet:
-- Semantic diff dimensions (tool-call divergence, risk escalation, response comparison)
 - Full experiment/eval/ground-truth CLI workflows (currently scaffolded)
 
 ## Architecture
@@ -119,7 +119,7 @@ This will:
 1. Load all baseline replay steps from the database
 2. Send each prompt to the variant model via agentgateway
 3. Store variant responses as a new experiment with runs
-4. Compute structural similarity (step count, token budget, latency)
+4. Compute similarity across 6 dimensions (step count, tokens, latency, tool calls, risk, response) when tool data is available, or 4 dimensions (structural + response) as fallback
 5. Print a verdict and exit with code 0 (pass) or 1 (fail)
 
 View a saved experiment report:
@@ -135,7 +135,7 @@ cmdr gate report <experiment-id>
 - `cmdr drift check`: implemented
 - `cmdr drift status`: implemented
 - `cmdr drift watch`: implemented
-- `cmdr gate check`: implemented (structural diff)
+- `cmdr gate check`: implemented (structural + semantic diff)
 - `cmdr gate report`: implemented
 - `cmdr experiment *`: scaffold only (prints not implemented)
 - `cmdr eval *`: scaffold only (prints not implemented)
@@ -175,7 +175,7 @@ cmd/cmdr/
 pkg/
   agwclient/              # agentgateway HTTP client (OpenAI-compatible)
   config/                 # env-based config loading/validation
-  diff/                   # structural comparison engine for gate verdicts
+  diff/                   # structural + semantic comparison engine for gate verdicts
   drift/                  # fingerprint extraction + comparison scoring
   otelreceiver/           # OTLP receiver + span parsing
   replay/                 # prompt replay orchestration engine

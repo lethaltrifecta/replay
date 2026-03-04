@@ -96,9 +96,13 @@ No replay needed — pure trace analysis.
   - Latency similarity (weight 0.3)
   - Configurable threshold, pass/fail verdict
 - [x] `diff_test.go` — table-driven unit tests
-- [ ] Tool call comparison: same tools? same args? same order?
-- [ ] Risk class changes: did the variant escalate risk?
-- [ ] Response divergence: structural comparison of completions
+- [x] `semantic.go` — semantic comparison dimensions:
+  - Tool call comparison: sequence similarity (Levenshtein) + frequency similarity (cosine)
+  - Risk class changes: asymmetric escalation penalty (read→write→destructive)
+  - Response divergence: Jaccard word overlap + length similarity
+- [x] `CompareAll` — 6-dimension scoring (structural + semantic) with 4-dimension fallback when no tool data
+- [x] Variant tool call capture in replay engine metadata
+- ~Tool argument comparison~ — descoped (too noisy for behavioral diff; name + risk class sufficient)
 
 ### 2.4 Gate CLI Commands
 - [x] `cmd/cmdr/commands/gate.go`:

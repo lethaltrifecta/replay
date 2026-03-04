@@ -197,8 +197,12 @@ func (e *Engine) replayStep(ctx context.Context, baseline *storage.ReplayTrace, 
 	}
 
 	completion := ""
+	metadata := storage.JSONB{"source": "replay", "baseline_trace_id": baseline.TraceID}
 	if len(resp.Choices) > 0 {
 		completion = resp.Choices[0].Message.Content
+		if len(resp.Choices[0].Message.ToolCalls) > 0 {
+			metadata["tool_calls"] = resp.Choices[0].Message.ToolCalls
+		}
 	}
 
 	return &storage.ReplayTrace{
@@ -216,7 +220,7 @@ func (e *Engine) replayStep(ctx context.Context, baseline *storage.ReplayTrace, 
 		CompletionTokens: resp.Usage.CompletionTokens,
 		TotalTokens:      resp.Usage.TotalTokens,
 		LatencyMS:        latencyMS,
-		Metadata:         storage.JSONB{"source": "replay", "baseline_trace_id": baseline.TraceID},
+		Metadata:         metadata,
 	}, nil
 }
 
