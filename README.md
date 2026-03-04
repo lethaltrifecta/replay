@@ -11,11 +11,11 @@ Implemented in this repo:
 - Tool capture extraction with deterministic args hashing + risk classification
 - Baseline management + drift scoring (fingerprint + comparison engine)
 - Drift CLI commands for baseline set/list/remove and trace drift checks
+- Deployment gate: replay baseline prompts with a variant model via agentgateway, diff results structurally, produce CI/CD pass/fail verdict
+- Gate CLI commands for replay check and experiment reporting
 
 Planned but not implemented yet:
-- Deployment gate / prompt replay engine
-- agentgateway replay client
-- Behavior diff engine for replay comparisons
+- Semantic diff dimensions (tool-call divergence, risk escalation, response comparison)
 - Full experiment/eval/ground-truth CLI workflows (currently scaffolded)
 
 ## Architecture
@@ -33,14 +33,14 @@ agentgateway (or any OTLP emitter)
 +-------------------------------+
         |
         v
-+-------------------------------+
-| PostgreSQL                    |
-| - otel_traces                 |
-| - replay_traces               |
-| - tool_captures               |
-| - baselines                   |
-| - drift_results               |
-| - (experiment/eval tables)    |
++-------------------------------+       +-------------------------------+
+| PostgreSQL                    |       | agentgateway                  |
+| - otel_traces                 |       | (OpenAI-compatible LLM proxy) |
+| - replay_traces               |       +-------------------------------+
+| - tool_captures               |                   ^
+| - baselines / drift_results   |                   |
+| - experiments / runs          |       cmdr gate check (replay prompts
+| - analysis_results            |        with variant model config)
 +-------------------------------+
 
 freeze-mcp (separate repo/service)
@@ -107,6 +107,27 @@ Each drift check stores a row in `drift_results` with:
 - verdict (`pass` / `warn` / `fail`)
 - detailed per-dimension breakdown
 
+## Gate Workflow
+
+Replay a captured baseline trace with a different model and verify the behavior is comparable:
+
+```bash
+cmdr gate check --baseline <trace-id> --model gpt-4o --threshold 0.8
+```
+
+This will:
+1. Load all baseline replay steps from the database
+2. Send each prompt to the variant model via agentgateway
+3. Store variant responses as a new experiment with runs
+4. Compute structural similarity (step count, token budget, latency)
+5. Print a verdict and exit with code 0 (pass) or 1 (fail)
+
+View a saved experiment report:
+
+```bash
+cmdr gate report <experiment-id>
+```
+
 ## Command Status
 
 - `cmdr serve`: implemented
@@ -114,6 +135,8 @@ Each drift check stores a row in `drift_results` with:
 - `cmdr drift check`: implemented
 - `cmdr drift status`: implemented
 - `cmdr drift watch`: implemented
+- `cmdr gate check`: implemented (structural diff)
+- `cmdr gate report`: implemented
 - `cmdr experiment *`: scaffold only (prints not implemented)
 - `cmdr eval *`: scaffold only (prints not implemented)
 - `cmdr ground-truth *`: scaffold only (prints not implemented)
@@ -134,7 +157,7 @@ make fmt
 
 ## Testing Notes
 
-- Pure unit packages (`pkg/config`, `pkg/drift`, `pkg/otelreceiver`) run without PostgreSQL.
+- Pure unit packages (`pkg/config`, `pkg/drift`, `pkg/otelreceiver`, `pkg/agwclient`, `pkg/diff`, `pkg/replay`) run without PostgreSQL.
 - Storage tests (`pkg/storage`) require a reachable PostgreSQL instance at `CMDR_POSTGRES_URL`.
 
 ## Project Layout
@@ -144,15 +167,19 @@ cmd/cmdr/
   commands/
     serve.go              # OTLP receiver startup
     drift.go              # baseline + drift check commands
+    gate.go               # deployment gate check + report
     experiment.go         # scaffold
     eval.go               # scaffold
     ground_truth.go       # scaffold
 
 pkg/
+  agwclient/              # agentgateway HTTP client (OpenAI-compatible)
   config/                 # env-based config loading/validation
-  otelreceiver/           # OTLP receiver + span parsing
-  storage/                # PostgreSQL models, queries, migrations
+  diff/                   # structural comparison engine for gate verdicts
   drift/                  # fingerprint extraction + comparison scoring
+  otelreceiver/           # OTLP receiver + span parsing
+  replay/                 # prompt replay orchestration engine
+  storage/                # PostgreSQL models, queries, migrations
   utils/logger/           # zap logger wrapper
 
 docs/                     # setup/testing/receiver docs

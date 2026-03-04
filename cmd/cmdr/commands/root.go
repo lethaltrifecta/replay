@@ -20,7 +20,8 @@ var rootCmd = &cobra.Command{
 	Long: `CMDR (Comparative Model Deterministic Replay) is a deterministic replay
 and evaluation system for comparing LLM agent behavior across models, prompts,
 policies, and tool configurations.`,
-	Version: version,
+	Version:       version,
+	SilenceErrors: true, // main.go handles error printing; prevent cobra from duplicating
 }
 
 func init() {
@@ -30,4 +31,5 @@ func init() {
 	rootCmd.AddCommand(evalCmd)
 	rootCmd.AddCommand(groundTruthCmd)
 	rootCmd.AddCommand(driftCmd)
+	rootCmd.AddCommand(gateCmd)
 }

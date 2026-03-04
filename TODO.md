@@ -31,40 +31,41 @@ freeze-mcp is a separate service (Python/FastAPI/MCP SDK) that reads from CMDR's
 No replay needed — pure trace analysis.
 
 ### 1.1 Baseline Management
-- [ ] Storage methods: `MarkTraceAsBaseline`, `UnmarkBaseline`, `ListBaselines`, `GetBaselineFingerprint`
-- [ ] Migration: add `is_baseline BOOLEAN DEFAULT FALSE` to `replay_traces` or new `baselines` table
-- [ ] CLI: `cmdr drift baseline set <trace_id>`
-- [ ] CLI: `cmdr drift baseline list`
-- [ ] CLI: `cmdr drift baseline remove <trace_id>`
+- [x] Storage methods: `MarkTraceAsBaseline`, `UnmarkBaseline`, `ListBaselines`, `GetBaseline`
+- [x] Migration: `baselines` table (`002_baselines_and_drift.sql`)
+- [x] CLI: `cmdr drift baseline set <trace_id>`
+- [x] CLI: `cmdr drift baseline list`
+- [x] CLI: `cmdr drift baseline remove <trace_id>`
 
 ### 1.2 Behavior Fingerprinting (`pkg/drift/`)
-- [ ] `fingerprint.go` — extract behavioral signature from a trace:
+- [x] `fingerprint.go` — extract behavioral signature from a trace:
   - Tool call sequence (ordered list of tool names)
   - Tool call frequency (counts per tool name)
   - Risk class distribution (read/write/destructive percentages)
   - Token usage (input/output averages)
   - Model and provider
-- [ ] `fingerprint_test.go` — unit tests
+- [x] `fingerprint_test.go` — unit tests
 
 ### 1.3 Drift Comparison (`pkg/drift/`)
-- [ ] `compare.go` — compare two fingerprints, produce a drift score:
+- [x] `compare.go` — compare two fingerprints, produce a drift score:
   - Sequence similarity (Levenshtein or LCS on tool call order)
   - Frequency divergence (cosine distance or simple delta)
   - Risk escalation detection (any read→write or write→destructive shift)
   - Token budget change
   - Overall drift score (weighted composite)
-- [ ] `compare_test.go` — unit tests
-- [ ] Configurable thresholds for pass/warn/fail
+- [x] `compare_test.go` — unit tests
+- [x] Configurable thresholds for pass/warn/fail
 
 ### 1.4 Drift CLI Commands
-- [ ] `cmd/cmdr/commands/drift.go`:
-  - `cmdr drift check [--trace-id <id>]` — compare a trace against its baseline
+- [x] `cmd/cmdr/commands/drift.go`:
+  - `cmdr drift check <trace-id>` — compare a trace against its baseline
   - `cmdr drift status` — show drift scores for recent traces
-  - `cmdr drift watch` — continuous mode (poll for new traces, check against baseline)
+  - `cmdr drift watch` — continuous poll mode with retry + overflow handling
+- [x] `cmd/cmdr/commands/drift_test.go` — unit tests for poll, cursor, dedup, retry logic
 
 ### 1.5 Storage for Drift Results
-- [ ] Migration: `drift_results` table (trace_id, baseline_trace_id, drift_score, details JSONB, created_at)
-- [ ] Storage methods: `StoreDriftResult`, `GetDriftResults`, `GetDriftResultsByBaseline`
+- [x] Migration: `drift_results` table + unique constraint (`002` + `003`)
+- [x] Storage methods: `CreateDriftResult` (idempotent), `GetDriftResults`, `GetDriftResultsByBaseline`, `GetLatestDriftResult`, `ListDriftResults`, `HasDriftResultForBaseline`
 
 ---
 
@@ -73,33 +74,34 @@ No replay needed — pure trace analysis.
 **Goal**: Before deploying a model/prompt change, replay captured scenarios and verify behavior doesn't regress.
 
 ### 2.1 agentgateway Client (`pkg/agwclient/`)
-- [ ] `client.go` — HTTP client for agentgateway
+- [x] `client.go` — HTTP client for agentgateway
   - Send LLM completion requests with model override
-  - Connection pooling, timeouts
-  - Parse responses
-- [ ] `client_test.go` — tests with mock HTTP server
-- [ ] Research agentgateway's HTTP API for sending LLM requests
+  - Retry with exponential backoff on 429/5xx, fail-fast on other 4xx
+  - Parse OpenAI-compatible responses
+- [x] `client_test.go` — tests with httptest mock server
 
 ### 2.2 Prompt Replay Engine (`pkg/replay/`)
-- [ ] `engine.go` — replay orchestration:
+- [x] `engine.go` — replay orchestration:
   - Load baseline trace steps (ordered by step_index)
   - For each step: extract the prompt, send to agentgateway with variant model config
-  - Capture variant responses
-  - Store as experiment + experiment_run
-- [ ] `engine_test.go` — unit tests
-- [ ] Integration with existing `experiments` / `experiment_runs` tables
+  - Capture variant responses as new ReplayTrace rows
+  - Manage experiment + experiment_run lifecycle (create, progress, finalize/fail)
+- [x] `engine_test.go` — unit tests (mock completer + mock storage)
+- [x] Integration with existing `experiments` / `experiment_runs` tables
 
 ### 2.3 Behavior Diff (`pkg/diff/`)
-- [ ] `diff.go` — compare baseline trace vs replayed variant:
-  - Tool call comparison: same tools? same args? same order?
-  - Risk class changes: did the variant escalate risk?
-  - Token efficiency: cost/latency delta
-  - Response divergence: structural comparison of completions
-- [ ] `diff_test.go` — unit tests
-- [ ] Produce a pass/fail verdict with configurable threshold
+- [x] `diff.go` — structural comparison of baseline vs replayed variant:
+  - Step count similarity (weight 0.4)
+  - Token budget similarity with log-dampened scoring (weight 0.3)
+  - Latency similarity (weight 0.3)
+  - Configurable threshold, pass/fail verdict
+- [x] `diff_test.go` — table-driven unit tests
+- [ ] Tool call comparison: same tools? same args? same order?
+- [ ] Risk class changes: did the variant escalate risk?
+- [ ] Response divergence: structural comparison of completions
 
 ### 2.4 Gate CLI Commands
-- [ ] `cmd/cmdr/commands/gate.go`:
+- [x] `cmd/cmdr/commands/gate.go`:
   - `cmdr gate check --baseline <trace_id> --model <model> [--threshold 0.8]`
   - `cmdr gate report <experiment_id>`
   - Exit code 0 = pass, 1 = fail (CI/CD friendly)

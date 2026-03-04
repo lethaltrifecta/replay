@@ -482,13 +482,13 @@ func (s *PostgresStorage) ListExperiments(ctx context.Context, filters Experimen
 func (s *PostgresStorage) CreateExperimentRun(ctx context.Context, run *ExperimentRun) error {
 	query := `
 		INSERT INTO experiment_runs (
-			id, experiment_id, run_type, variant_config, trace_id, status, error, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			id, experiment_id, run_type, variant_config, trace_id, status, error, created_at, completed_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
 	_, err := s.pool.Exec(ctx, query,
 		run.ID, run.ExperimentID, run.RunType, run.VariantConfig, run.TraceID,
-		run.Status, run.Error, run.CreatedAt,
+		run.Status, run.Error, run.CreatedAt, run.CompletedAt,
 	)
 
 	return err
