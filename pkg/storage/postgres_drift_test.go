@@ -197,7 +197,7 @@ func TestGetDriftResults(t *testing.T) {
 
 	r2 := &DriftResult{
 		TraceID:         "drift-by-trace",
-		BaselineTraceID: "baseline-a",
+		BaselineTraceID: "baseline-b",
 		DriftScore:      0.8,
 		Verdict:         DriftVerdictFail,
 	}
@@ -207,7 +207,7 @@ func TestGetDriftResults(t *testing.T) {
 	// Different trace
 	r3 := &DriftResult{
 		TraceID:         "other-trace",
-		BaselineTraceID: "baseline-b",
+		BaselineTraceID: "baseline-c",
 		DriftScore:      0.3,
 		Verdict:         DriftVerdictWarn,
 	}
@@ -253,7 +253,7 @@ func TestGetDriftResultsByBaseline(t *testing.T) {
 	err = store.CreateDriftResult(ctx, r2)
 	require.NoError(t, err)
 
-	results, err := store.GetDriftResultsByBaseline(ctx, "shared-baseline")
+	results, err := store.GetDriftResultsByBaseline(ctx, "shared-baseline", 0)
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 	// Newest first
@@ -284,7 +284,7 @@ func TestGetLatestDriftResult(t *testing.T) {
 
 	r2 := &DriftResult{
 		TraceID:         "latest-trace",
-		BaselineTraceID: "baseline-z",
+		BaselineTraceID: "baseline-z2",
 		DriftScore:      0.7,
 		Verdict:         DriftVerdictWarn,
 	}
@@ -295,4 +295,112 @@ func TestGetLatestDriftResult(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0.7, latest.DriftScore)
 	assert.Equal(t, DriftVerdictWarn, latest.Verdict)
+}
+
+func TestListDriftResults(t *testing.T) {
+	store := setupTestDB(t)
+	defer teardownTestDB(t, store)
+
+	ctx := context.Background()
+
+	// Empty
+	results, err := store.ListDriftResults(ctx, 10)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	// Insert 3 results
+	for i, tid := range []string{"trace-a", "trace-b", "trace-c"} {
+		r := &DriftResult{
+			TraceID:         tid,
+			BaselineTraceID: "baseline-x",
+			DriftScore:      float64(i) * 0.1,
+			Verdict:         DriftVerdictPass,
+		}
+		err := store.CreateDriftResult(ctx, r)
+		require.NoError(t, err)
+	}
+
+	// Limit 2 — should get the 2 newest
+	results, err = store.ListDriftResults(ctx, 2)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "trace-c", results[0].TraceID)
+	assert.Equal(t, "trace-b", results[1].TraceID)
+
+	// Limit larger than count — returns all
+	results, err = store.ListDriftResults(ctx, 100)
+	require.NoError(t, err)
+	assert.Len(t, results, 3)
+}
+
+func TestHasDriftResultForBaseline(t *testing.T) {
+	store := setupTestDB(t)
+	defer teardownTestDB(t, store)
+
+	ctx := context.Background()
+
+	// No results
+	exists, err := store.HasDriftResultForBaseline(ctx, "trace-1", "baseline-1")
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	// Insert a result for trace-1 against baseline-1
+	r := &DriftResult{
+		TraceID:         "trace-1",
+		BaselineTraceID: "baseline-1",
+		DriftScore:      0.1,
+		Verdict:         DriftVerdictPass,
+	}
+	err = store.CreateDriftResult(ctx, r)
+	require.NoError(t, err)
+
+	// Now exists for same pair
+	exists, err = store.HasDriftResultForBaseline(ctx, "trace-1", "baseline-1")
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	// Does NOT exist for different baseline
+	exists, err = store.HasDriftResultForBaseline(ctx, "trace-1", "baseline-2")
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	// Does NOT exist for different trace
+	exists, err = store.HasDriftResultForBaseline(ctx, "trace-2", "baseline-1")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestCreateDriftResult_DuplicateIsIdempotent(t *testing.T) {
+	store := setupTestDB(t)
+	defer teardownTestDB(t, store)
+
+	ctx := context.Background()
+
+	r1 := &DriftResult{
+		TraceID:         "dup-trace",
+		BaselineTraceID: "dup-baseline",
+		DriftScore:      0.25,
+		Verdict:         DriftVerdictPass,
+		Details:         JSONB{"info": "first"},
+	}
+	err := store.CreateDriftResult(ctx, r1)
+	require.NoError(t, err)
+	assert.NotZero(t, r1.ID)
+
+	// Second insert with same (trace_id, baseline_trace_id) should succeed silently
+	r2 := &DriftResult{
+		TraceID:         "dup-trace",
+		BaselineTraceID: "dup-baseline",
+		DriftScore:      0.9,
+		Verdict:         DriftVerdictFail,
+		Details:         JSONB{"info": "second"},
+	}
+	err = store.CreateDriftResult(ctx, r2)
+	require.NoError(t, err, "duplicate insert should be idempotent")
+
+	// Only one row should exist
+	results, err := store.GetDriftResults(ctx, "dup-trace")
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, 0.25, results[0].DriftScore, "original row should be preserved")
 }

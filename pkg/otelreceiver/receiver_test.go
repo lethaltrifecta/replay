@@ -168,11 +168,17 @@ func (m *mockStorage) CreateDriftResult(ctx context.Context, result *storage.Dri
 func (m *mockStorage) GetDriftResults(ctx context.Context, traceID string) ([]*storage.DriftResult, error) {
 	return nil, nil
 }
-func (m *mockStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string) ([]*storage.DriftResult, error) {
+func (m *mockStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string, limit int) ([]*storage.DriftResult, error) {
 	return nil, nil
 }
 func (m *mockStorage) GetLatestDriftResult(ctx context.Context, traceID string) (*storage.DriftResult, error) {
 	return nil, nil
+}
+func (m *mockStorage) ListDriftResults(ctx context.Context, limit int) ([]*storage.DriftResult, error) {
+	return nil, nil
+}
+func (m *mockStorage) HasDriftResultForBaseline(ctx context.Context, traceID string, baselineTraceID string) (bool, error) {
+	return false, nil
 }
 
 // Batch operations

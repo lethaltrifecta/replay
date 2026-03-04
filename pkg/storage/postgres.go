@@ -81,6 +81,17 @@ func (s *PostgresStorage) Migrate(ctx context.Context) error {
 		return fmt.Errorf("failed to execute migration 002: %w", err)
 	}
 
+	// Dedup existing drift_results rows and add unique constraint
+	migrationSQL3, err := migrationsFS.ReadFile("migrations/003_drift_unique_constraint.sql")
+	if err != nil {
+		return fmt.Errorf("failed to read migration file 003: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, string(migrationSQL3))
+	if err != nil {
+		return fmt.Errorf("failed to execute migration 003: %w", err)
+	}
+
 	return nil
 }
 
@@ -234,7 +245,11 @@ func (s *PostgresStorage) ListReplayTraces(ctx context.Context, filters TraceFil
 		argNum++
 	}
 
-	query += " ORDER BY created_at DESC"
+	if filters.SortAsc {
+		query += " ORDER BY created_at ASC"
+	} else {
+		query += " ORDER BY created_at DESC"
+	}
 
 	if filters.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT $%d", argNum)

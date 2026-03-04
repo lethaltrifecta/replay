@@ -1,85 +1,64 @@
 # Implementation Status
 
-Last updated: 2026-02-27
+Last updated: 2026-03-02
 
 ## Completed
 
-### Foundation
-- [x] Project structure and Go module
-- [x] Configuration system (`pkg/config/`) with envconfig + validation
-- [x] Structured logging (`pkg/utils/logger/`) with zap
-- [x] CLI framework (Cobra) with all commands scaffolded
-- [x] Docker multi-stage build (distroless runtime)
-- [x] docker-compose (PostgreSQL 15 + Jaeger)
-- [x] GitHub Actions CI (test, lint, build)
-- [x] Makefile with dev workflow commands
-- [x] Local dev setup scripts
+### Core platform
+- [x] Project structure, build tooling, CI, Docker assets
+- [x] Environment config loading and validation (`pkg/config`)
+- [x] Structured logging (`pkg/utils/logger`)
 
-### Database Layer (`pkg/storage/`)
-- [x] Storage interface — 34 methods
-- [x] PostgreSQL implementation — full CRUD for all 12 tables
-- [x] Data models — 11 structs with proper Go tags, JSONB support
-- [x] Migrations — embedded SQL, 12 tables with indexes and constraints
-- [x] Integration tests — 5 test functions (traces, tools, experiments, evaluators)
+### Storage layer
+- [x] PostgreSQL storage implementation (`pkg/storage`)
+- [x] Initial schema migration (`001_initial_schema.sql`)
+- [x] Baseline + drift migration (`002_baselines_and_drift.sql`)
+- [x] Baseline CRUD methods (`MarkTraceAsBaseline`, `ListBaselines`, `GetBaseline`, `UnmarkBaseline`)
+- [x] Drift result persistence methods (`CreateDriftResult`, `GetDriftResults`, `GetDriftResultsByBaseline`, `GetLatestDriftResult`, `ListDriftResults`, `HasDriftResultForBaseline`)
 
-### OTLP Receiver (`pkg/otelreceiver/`)
-- [x] gRPC receiver (port 4317)
-- [x] HTTP receiver (port 4318) with JSON + protobuf support
-- [x] Span parser — extracts `gen_ai.*` attributes
-- [x] LLM data extraction — model, provider, prompts, completions, tokens, parameters
-- [x] Tool call extraction from span events
-- [x] Risk class determination (read/write/destructive by tool name)
-- [x] Args hash calculation (SHA-256, recursive normalization, int/float coercion)
-- [x] Integration with storage layer
-- [x] Integrated into `serve` command
-- [x] Unit tests with mock storage + args hash determinism tests
+### OTLP ingestion
+- [x] gRPC + HTTP OTLP receiver (`pkg/otelreceiver/receiver.go`)
+- [x] LLM span parsing from `gen_ai.*` attributes (`pkg/otelreceiver/parser.go`)
+- [x] Tool capture extraction with risk classification + args hash
+- [x] Health endpoint on OTLP HTTP server (`/health`)
 
-### freeze-mcp (Separate Repo)
-- [x] Python MCP server (FastAPI + MCP SDK + SSE transport)
-- [x] Reads from CMDR's `tool_captures` table (read-only)
-- [x] Lookup by `(tool_name, args_hash, trace_id)`
-- [x] Args hash normalization matching CMDR's Go implementation
-- [x] Per-session trace scoping via `X-Freeze-Trace-ID` header
-- [x] LRU cache, async PostgreSQL pool
-- [x] Fully tested with pinned cross-language hash vectors
+### Drift detection
+- [x] Fingerprint extraction (`pkg/drift/fingerprint.go`)
+- [x] Comparison/scoring engine (`pkg/drift/compare.go`)
+- [x] Default weighting + pass/warn/fail thresholds (`pkg/drift/config.go`)
+- [x] Drift CLI:
+  - `cmdr drift baseline set`
+  - `cmdr drift baseline list`
+  - `cmdr drift baseline remove`
+  - `cmdr drift check`
+  - `cmdr drift status`
+  - `cmdr drift watch`
 
-## In Progress
+## Partially implemented / scaffolded
 
-### Drift Detection (`pkg/drift/` — TODO)
-- [ ] Baseline management (storage methods + migration)
-- [ ] Behavior fingerprinting (tool patterns, risk distribution, token usage)
-- [ ] Drift comparison (sequence similarity, risk escalation, composite score)
-- [ ] Drift CLI commands (`cmdr drift baseline/check/status/watch`)
-- [ ] Drift results storage
+- `cmdr experiment *`: command scaffolds only
+- `cmdr eval *`: command scaffolds only
+- `cmdr ground-truth *`: command scaffolds only
+- Deployment gate / replay flow: planned, not implemented
 
-### Deployment Gate (`pkg/replay/`, `pkg/agwclient/`, `pkg/diff/` — TODO)
-- [ ] agentgateway HTTP client
-- [ ] Prompt replay engine (load baseline, replay each step with variant model)
-- [ ] Behavior diff (tool call comparison, risk changes, token delta)
-- [ ] Gate CLI commands (`cmdr gate check/report`)
+## Testing snapshot
 
-## Not Started
+Verified in this workspace:
+- `go test ./pkg/config ./pkg/drift ./pkg/otelreceiver ./cmd/cmdr/commands` -> passing
 
-- [ ] Demo scenario scripting
-- [ ] Report generation (Markdown)
-- [ ] Demo video recording
-- [ ] Blog post
-- [ ] Submission materials
+Not fully runnable in this sandbox:
+- `go test ./pkg/storage` requires reachable PostgreSQL (`CMDR_POSTGRES_URL`), but sandbox-local DB access is restricted here.
 
-## Descoped for Hackathon
+## Known technical debt
 
-- REST API (CLI-only for now)
-- 5 evaluator types (replaced by drift + gate verdicts)
-- Human review queue
-- LLM-as-judge
-- kagent integration
-- agentregistry integration
-- Production hardening (JWT, rate limiting, Prometheus)
+- `serve` startup relies on `time.Sleep(500ms)` readiness check
+- graceful shutdown logic is incomplete in `serve.go`
+- OTLP HTTP handler lacks request body size limits
+- drift report details are untyped (`map[string]interface{}`)
+- storage interface is broad, causing heavy mocks in tests
 
-## Known Issues
+## Related docs
 
-- `serve.go` uses `time.Sleep(500ms)` for startup check — should use proper readiness signal
-- Shutdown is incomplete (`shutdownCtx` created but unused)
-- No request body size limit on HTTP OTLP endpoint
-- Dockerfile uses Go 1.24, matches go.mod (fixed from 1.23)
-- Some notes/ docs reference stale paths (`/Users/jaden.lee/...`)
+- `README.md` for current product-level status
+- `TODO.md` for execution backlog
+- `docs/REFACTORING.md` for prioritized refactor opportunities
