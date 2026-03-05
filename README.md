@@ -155,10 +155,22 @@ make lint
 make fmt
 ```
 
+If Docker host ports are already in use (for example `8080`), set overrides in `.env`:
+`CMDR_HOST_API_PORT`, `CMDR_HOST_OTLP_GRPC_PORT`, `CMDR_HOST_OTLP_HTTP_PORT`, `CMDR_HOST_FREEZETOOLS_PORT`.
+Defaults remain `8080`, `4317`, `4318`, `9090`.
+
 ## Testing Notes
 
 - Pure unit packages (`pkg/config`, `pkg/drift`, `pkg/otelreceiver`, `pkg/agwclient`, `pkg/diff`, `pkg/replay`) run without PostgreSQL.
 - Storage tests (`pkg/storage`) require a reachable PostgreSQL instance at `CMDR_POSTGRES_URL`.
+- Freeze contract e2e test (`test/e2e/freeze_contract_test.go`) is opt-in:
+  - Start freeze-mcp (`python -m freeze_mcp.server`) against the same PostgreSQL.
+  - Run: `make test-e2e-freeze-contract`
+  - Optional endpoint overrides: `E2E_FREEZE_HEALTH_URL`, `E2E_FREEZE_MCP_URL`.
+- Replay + freeze e2e test (`test/e2e/replay_freeze_test.go`) is opt-in:
+  - Start CMDR (`cmdr serve`) and freeze-mcp (`python -m freeze_mcp.server`) against the same PostgreSQL.
+  - Run: `make test-e2e-replay-freeze`
+  - Optional endpoint overrides: `E2E_OTLP_HEALTH_URL`, `E2E_OTLP_INGEST_URL`, `E2E_FREEZE_HEALTH_URL`, `E2E_FREEZE_MCP_URL`.
 
 ## Project Layout
 
