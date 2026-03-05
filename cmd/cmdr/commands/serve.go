@@ -10,6 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/lethaltrifecta/replay/pkg/agwclient"
+	"github.com/lethaltrifecta/replay/pkg/api"
 	"github.com/lethaltrifecta/replay/pkg/config"
 	"github.com/lethaltrifecta/replay/pkg/otelreceiver"
 	"github.com/lethaltrifecta/replay/pkg/storage"
@@ -95,10 +97,35 @@ func runServe(cmd *cobra.Command, args []string) error {
 		log.Info("OTLP receiver is ready")
 	}
 
-	// TODO: Start remaining components
-	// - Freeze-Tools MCP server
-	// - HTTP API server
-	// - Replay engine worker pool
+	// Create agentgateway client for replay
+	agwClient := agwclient.NewClient(agwclient.ClientConfig{
+		BaseURL:    cfg.AgentgatewayURL,
+		Timeout:    cfg.AgentgatewayTimeout,
+		MaxRetries: cfg.AgentgatewayRetries,
+	})
+
+	// Start HTTP API server
+	apiServer := api.NewServer(api.ServerConfig{
+		Port:                 cfg.APIPort,
+		MaxConcurrentReplays: cfg.MaxConcurrentReplays,
+	}, store, agwClient, log)
+
+	apiDone := make(chan error, 1)
+	go func() {
+		if err := apiServer.Start(); err != nil {
+			log.Error("API server failed", "error", err)
+			apiDone <- err
+		}
+	}()
+
+	// Give API server a moment to start
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-apiDone:
+		return fmt.Errorf("API server failed to start: %w", err)
+	default:
+		log.Info("API server is ready", "port", cfg.APIPort)
+	}
 
 	log.Info("CMDR service started successfully")
 
@@ -113,14 +140,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// TODO: Graceful shutdown
-	// - Stop accepting new requests
-	// - Wait for in-flight requests to complete
-	// - Close database connections
-	// - Shutdown OTLP receiver
-	// - Shutdown HTTP server
-
-	_ = shutdownCtx // Use context for shutdown operations
+	// Graceful shutdown: stop API server, then OTLP receiver
+	if err := apiServer.Shutdown(shutdownCtx); err != nil {
+		log.Error("API server shutdown error", "error", err)
+	}
+	cancelReceiver()
 
 	log.Info("Shutdown complete")
 	return nil

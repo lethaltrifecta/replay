@@ -26,6 +26,17 @@ type VariantConfig struct {
 	MaxTokens   *int     `json:"max_tokens,omitempty"`
 }
 
+// PreparedRun holds the state created by Setup, ready for Execute.
+type PreparedRun struct {
+	ExperimentID  uuid.UUID
+	BaselineRunID uuid.UUID
+	VariantRunID  uuid.UUID
+	BaselineSteps []*storage.ReplayTrace
+	Experiment    *storage.Experiment
+	VariantRun    *storage.ExperimentRun
+	VariantConfig VariantConfig
+}
+
 // Result holds the outcome of a replay run.
 type Result struct {
 	ExperimentID   uuid.UUID
@@ -49,7 +60,19 @@ func NewEngine(store storage.Storage, client Completer) *Engine {
 
 // Run replays every step from baselineTraceID using the variant config.
 // It creates Experiment and ExperimentRun records, and persists each variant ReplayTrace.
+// This is the synchronous all-in-one entry point (calls Setup then Execute).
 func (e *Engine) Run(ctx context.Context, baselineTraceID string, variant VariantConfig) (*Result, error) {
+	prepared, err := e.Setup(ctx, baselineTraceID, variant)
+	if err != nil {
+		return nil, err
+	}
+	return e.Execute(ctx, prepared)
+}
+
+// Setup loads the baseline, creates Experiment + ExperimentRun records, and returns
+// a PreparedRun that can be passed to Execute. This is the synchronous first phase
+// that produces an experiment ID before the (potentially long-running) replay loop.
+func (e *Engine) Setup(ctx context.Context, baselineTraceID string, variant VariantConfig) (*PreparedRun, error) {
 	// Load baseline steps
 	baselineSteps, err := e.store.GetReplayTraceSpans(ctx, baselineTraceID)
 	if err != nil {
@@ -118,19 +141,38 @@ func (e *Engine) Run(ctx context.Context, baselineTraceID string, variant Varian
 		return nil, fmt.Errorf("create variant run: %w", err)
 	}
 
-	result := &Result{
+	return &PreparedRun{
 		ExperimentID:  experimentID,
 		BaselineRunID: baselineRunID,
 		VariantRunID:  variantRunID,
+		BaselineSteps: baselineSteps,
+		Experiment:    exp,
+		VariantRun:    variantRun,
+		VariantConfig: variant,
+	}, nil
+}
+
+// Execute runs the replay loop using a previously prepared run.
+// It sends each baseline prompt to the variant model, persists the results,
+// and finalizes the experiment status.
+func (e *Engine) Execute(ctx context.Context, prepared *PreparedRun) (*Result, error) {
+	result := &Result{
+		ExperimentID:  prepared.ExperimentID,
+		BaselineRunID: prepared.BaselineRunID,
+		VariantRunID:  prepared.VariantRunID,
 	}
 
 	// Generate variant trace ID
 	variantTraceID := uuid.New().String()
 	result.VariantTraceID = variantTraceID
 
+	exp := prepared.Experiment
+	variantRun := prepared.VariantRun
+	variant := prepared.VariantConfig
+
 	// Replay each baseline step
-	totalSteps := len(baselineSteps)
-	for i, step := range baselineSteps {
+	totalSteps := len(prepared.BaselineSteps)
+	for i, step := range prepared.BaselineSteps {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			cleanupErr := e.failExperiment(exp, variantRun, ctxErr)
 			result.Error = ctxErr
