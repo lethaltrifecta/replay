@@ -128,6 +128,29 @@ View a saved experiment report:
 cmdr gate report <experiment-id>
 ```
 
+## Judge Demo
+
+Run a deterministic, no-external-LLM demo that shows:
+- drift detection catching risky behavior
+- deployment gate failing a dangerous model with exit code `1`
+- deployment gate passing a safe model with exit code `0`
+
+```bash
+make dev-up
+make demo
+```
+
+Manual demo commands:
+
+```bash
+cmdr demo seed
+cmdr drift check demo-drifted-002 --baseline demo-baseline-001
+cmdr demo gate --baseline demo-baseline-001 --model gpt-4o-danger   # exits 1
+cmdr demo gate --baseline demo-baseline-001 --model claude-3-5-sonnet  # exits 0
+```
+
+Full presenter script and expected outputs: [docs/DEMO.md](docs/DEMO.md)
+
 ## Command Status
 
 - `cmdr serve`: implemented
@@ -137,6 +160,7 @@ cmdr gate report <experiment-id>
 - `cmdr drift watch`: implemented
 - `cmdr gate check`: implemented (structural + semantic diff)
 - `cmdr gate report`: implemented
+- `cmdr demo {seed,gate}`: implemented (deterministic hackathon demo commands)
 - `cmdr experiment *`: scaffold only (prints not implemented)
 - `cmdr eval *`: scaffold only (prints not implemented)
 - `cmdr ground-truth *`: scaffold only (prints not implemented)
@@ -193,6 +217,7 @@ notes/                    # implementation notes + planning
 - [docs/OTLP_RECEIVER.md](docs/OTLP_RECEIVER.md)
 - [docs/TESTING_OTLP.md](docs/TESTING_OTLP.md)
 - [docs/DEBUGGING_OTLP.md](docs/DEBUGGING_OTLP.md)
+- [docs/DEMO.md](docs/DEMO.md)
 - [notes/IMPLEMENTATION_STATUS.md](notes/IMPLEMENTATION_STATUS.md)
 - [docs/REFACTORING.md](docs/REFACTORING.md)
 
