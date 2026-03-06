@@ -297,7 +297,7 @@ func TestHandleGateCheck_202(t *testing.T) {
 	body, _ := json.Marshal(gateCheckRequest{
 		BaselineTraceID: "trace-abc",
 		Model:           "gpt-4o",
-		Threshold:       0.8,
+		Threshold:       floatPtr(0.8),
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate/check", bytes.NewReader(body))
@@ -330,7 +330,7 @@ func TestHandleGateCheck_MissingFields_400(t *testing.T) {
 	}{
 		{"missing baseline", gateCheckRequest{Model: "gpt-4o"}},
 		{"missing model", gateCheckRequest{BaselineTraceID: "trace-abc"}},
-		{"bad threshold", gateCheckRequest{BaselineTraceID: "trace-abc", Model: "gpt-4o", Threshold: 1.5}},
+		{"bad threshold", gateCheckRequest{BaselineTraceID: "trace-abc", Model: "gpt-4o", Threshold: floatPtr(1.5)}},
 	}
 
 	for _, tt := range tests {
@@ -356,7 +356,7 @@ func TestHandleGateCheck_AtCapacity_503(t *testing.T) {
 	body, _ := json.Marshal(gateCheckRequest{
 		BaselineTraceID: "trace-abc",
 		Model:           "gpt-4o",
-		Threshold:       0.8,
+		Threshold:       floatPtr(0.8),
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate/check", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -479,3 +479,5 @@ func TestHandleHealth_Degraded(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "degraded", resp["status"])
 }
+
+func floatPtr(f float64) *float64 { return &f }

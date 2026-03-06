@@ -56,6 +56,7 @@ func init() {
 	_ = gateCheckCmd.MarkFlagRequired("model")
 
 	gateReportCmd.Flags().String("server", "", "CMDR server URL for remote execution")
+	gateReportCmd.Flags().String("model", "", "Variant model name (for display in remote report)")
 }
 
 func runGateCheck(cmd *cobra.Command, args []string) error {
@@ -253,6 +254,12 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 			return fmt.Errorf("poll status: %w", err)
 		}
 
+		if statusResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(statusResp.Body)
+			statusResp.Body.Close()
+			return fmt.Errorf("status endpoint returned %d: %s", statusResp.StatusCode, string(body))
+		}
+
 		var status remoteStatusResponse
 		if err := json.NewDecoder(statusResp.Body).Decode(&status); err != nil {
 			statusResp.Body.Close()
@@ -283,6 +290,11 @@ func fetchAndPrintRemoteReport(cmd *cobra.Command, serverURL, experimentID, mode
 	}
 	defer reportResp.Body.Close()
 
+	if reportResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(reportResp.Body)
+		return fmt.Errorf("report endpoint returned %d: %s", reportResp.StatusCode, string(body))
+	}
+
 	var report remoteReportResponse
 	if err := json.NewDecoder(reportResp.Body).Decode(&report); err != nil {
 		return fmt.Errorf("decode report: %w", err)
@@ -310,6 +322,14 @@ func fetchAndPrintRemoteReport(cmd *cobra.Command, serverURL, experimentID, mode
 
 	if report.Verdict == "fail" {
 		return ErrGateFailed
+	}
+
+	// If experiment failed but no verdict was produced, that's an error
+	if report.Status == storage.StatusFailed {
+		if report.Error != "" {
+			return fmt.Errorf("experiment failed: %s", report.Error)
+		}
+		return fmt.Errorf("experiment failed without producing a verdict")
 	}
 
 	return nil

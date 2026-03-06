@@ -13,10 +13,10 @@ import (
 // --- Request / Response types ---
 
 type gateCheckRequest struct {
-	BaselineTraceID string  `json:"baseline_trace_id"`
-	Model           string  `json:"model"`
-	Provider        string  `json:"provider"`
-	Threshold       float64 `json:"threshold"`
+	BaselineTraceID string   `json:"baseline_trace_id"`
+	Model           string   `json:"model"`
+	Provider        string   `json:"provider"`
+	Threshold       *float64 `json:"threshold"`
 }
 
 type gateCheckResponse struct {
@@ -59,10 +59,11 @@ func (s *Server) handleGateCheck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "model is required")
 		return
 	}
-	if req.Threshold == 0 {
-		req.Threshold = 0.8 // default
+	if req.Threshold == nil {
+		defaultThreshold := 0.8
+		req.Threshold = &defaultThreshold
 	}
-	if req.Threshold < 0 || req.Threshold > 1 {
+	if *req.Threshold < 0 || *req.Threshold > 1 {
 		writeError(w, http.StatusBadRequest, "threshold must be between 0.0 and 1.0")
 		return
 	}
@@ -99,7 +100,7 @@ func (s *Server) handleGateCheck(w http.ResponseWriter, r *http.Request) {
 	// Run the pipeline in the background
 	go func() {
 		defer func() { <-s.sem }()
-		RunGatePipeline(s.ctx, s.store, engine, prepared, req.Threshold, s.log)
+		RunGatePipeline(s.ctx, s.store, engine, prepared, *req.Threshold, s.log)
 	}()
 }
 
