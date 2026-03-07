@@ -2,9 +2,14 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -46,8 +51,12 @@ func init() {
 	gateCheckCmd.Flags().String("model", "", "Variant model name (required)")
 	gateCheckCmd.Flags().String("provider", "", "Variant provider (optional)")
 	gateCheckCmd.Flags().Float64("threshold", 0.8, "Similarity threshold for pass verdict")
+	gateCheckCmd.Flags().String("server", "", "CMDR server URL for remote execution (e.g. http://localhost:8080)")
 	_ = gateCheckCmd.MarkFlagRequired("baseline")
 	_ = gateCheckCmd.MarkFlagRequired("model")
+
+	gateReportCmd.Flags().String("server", "", "CMDR server URL for remote execution")
+	gateReportCmd.Flags().String("model", "", "Variant model name (for display in remote report)")
 }
 
 func runGateCheck(cmd *cobra.Command, args []string) error {
@@ -55,11 +64,20 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 	model, _ := cmd.Flags().GetString("model")
 	provider, _ := cmd.Flags().GetString("provider")
 	threshold, _ := cmd.Flags().GetFloat64("threshold")
+	server, _ := cmd.Flags().GetString("server")
 
 	if threshold < 0 || threshold > 1 {
 		return fmt.Errorf("--threshold must be between 0.0 and 1.0, got %.2f", threshold)
 	}
 
+	if server != "" {
+		return runGateCheckRemote(cmd, server, baselineTraceID, model, provider, threshold)
+	}
+
+	return runGateCheckLocal(cmd, baselineTraceID, model, provider, threshold)
+}
+
+func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider string, threshold float64) error {
 	// Load config and validate agentgateway is configured
 	cfg, err := config.Load()
 	if err != nil {
@@ -159,10 +177,174 @@ func resolveToolComparisonInputs(
 // Callers should exit with code 1 when they see this error.
 var ErrGateFailed = errors.New("gate check failed")
 
+// --- Remote execution via HTTP API ---
+
+type remoteCheckRequest struct {
+	BaselineTraceID string  `json:"baseline_trace_id"`
+	Model           string  `json:"model"`
+	Provider        string  `json:"provider,omitempty"`
+	Threshold       float64 `json:"threshold"`
+}
+
+type remoteCheckResponse struct {
+	ExperimentID string `json:"experiment_id"`
+	Status       string `json:"status"`
+	Error        string `json:"error,omitempty"`
+}
+
+type remoteStatusResponse struct {
+	ExperimentID string  `json:"experiment_id"`
+	Status       string  `json:"status"`
+	Progress     float64 `json:"progress"`
+	Error        string  `json:"error,omitempty"`
+}
+
+type remoteReportResponse struct {
+	ExperimentID    string   `json:"experiment_id"`
+	Status          string   `json:"status"`
+	BaselineTraceID string   `json:"baseline_trace_id"`
+	Verdict         string   `json:"verdict,omitempty"`
+	SimilarityScore *float64 `json:"similarity_score,omitempty"`
+	TokenDelta      *int     `json:"token_delta,omitempty"`
+	LatencyDelta    *int     `json:"latency_delta,omitempty"`
+	Error           string   `json:"error,omitempty"`
+}
+
+func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, provider string, threshold float64) error {
+	serverURL := strings.TrimRight(server, "/")
+
+	// Submit gate check
+	reqBody := remoteCheckRequest{
+		BaselineTraceID: baselineTraceID,
+		Model:           model,
+		Provider:        provider,
+		Threshold:       threshold,
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	cmd.Printf("Submitting gate check to %s...\n", server)
+
+	resp, err := http.Post(serverURL+"/api/v1/gate/check", "application/json", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("submit gate check: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var checkResp remoteCheckResponse
+	if err := json.NewDecoder(resp.Body).Decode(&checkResp); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+
+	cmd.Printf("Experiment %s submitted, polling for results...\n", checkResp.ExperimentID)
+
+	// Poll for completion
+	for {
+		time.Sleep(2 * time.Second)
+
+		statusResp, err := http.Get(serverURL + "/api/v1/gate/status/" + checkResp.ExperimentID)
+		if err != nil {
+			return fmt.Errorf("poll status: %w", err)
+		}
+
+		if statusResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(statusResp.Body)
+			statusResp.Body.Close()
+			return fmt.Errorf("status endpoint returned %d: %s", statusResp.StatusCode, string(body))
+		}
+
+		var status remoteStatusResponse
+		if err := json.NewDecoder(statusResp.Body).Decode(&status); err != nil {
+			statusResp.Body.Close()
+			return fmt.Errorf("decode status: %w", err)
+		}
+		statusResp.Body.Close()
+
+		switch status.Status {
+		case storage.StatusRunning:
+			cmd.Printf("  Progress: %.0f%%\n", status.Progress*100)
+			continue
+		case storage.StatusCompleted, storage.StatusFailed:
+			// Done — fetch full report
+		default:
+			cmd.Printf("  Status: %s\n", status.Status)
+			continue
+		}
+
+		// Fetch and display report
+		return fetchAndPrintRemoteReport(cmd, serverURL, checkResp.ExperimentID, model)
+	}
+}
+
+func fetchAndPrintRemoteReport(cmd *cobra.Command, serverURL, experimentID, model string) error {
+	reportResp, err := http.Get(serverURL + "/api/v1/gate/report/" + experimentID)
+	if err != nil {
+		return fmt.Errorf("fetch report: %w", err)
+	}
+	defer reportResp.Body.Close()
+
+	if reportResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(reportResp.Body)
+		return fmt.Errorf("report endpoint returned %d: %s", reportResp.StatusCode, string(body))
+	}
+
+	var report remoteReportResponse
+	if err := json.NewDecoder(reportResp.Body).Decode(&report); err != nil {
+		return fmt.Errorf("decode report: %w", err)
+	}
+
+	cmd.Printf("\nGate Check Result\n")
+	cmd.Printf("=================\n")
+	cmd.Printf("Baseline:   %s\n", report.BaselineTraceID)
+	cmd.Printf("Variant:    %s\n", model)
+	cmd.Printf("Status:     %s\n", report.Status)
+
+	if report.SimilarityScore != nil {
+		cmd.Printf("Similarity: %.4f\n", *report.SimilarityScore)
+	}
+	if report.Verdict != "" {
+		cmd.Printf("Verdict:    %s\n", verdictDisplay(report.Verdict))
+	}
+	if report.TokenDelta != nil {
+		cmd.Printf("Token Delta: %+d\n", *report.TokenDelta)
+	}
+	if report.LatencyDelta != nil {
+		cmd.Printf("Latency Delta: %+dms\n", *report.LatencyDelta)
+	}
+	cmd.Printf("Experiment: %s\n", experimentID)
+
+	if report.Verdict == "fail" {
+		return ErrGateFailed
+	}
+
+	// If experiment failed but no verdict was produced, that's an error
+	if report.Status == storage.StatusFailed {
+		if report.Error != "" {
+			return fmt.Errorf("experiment failed: %s", report.Error)
+		}
+		return fmt.Errorf("experiment failed without producing a verdict")
+	}
+
+	return nil
+}
+
 func runGateReport(cmd *cobra.Command, args []string) error {
 	experimentID, err := uuid.Parse(args[0])
 	if err != nil {
 		return fmt.Errorf("invalid experiment ID: %w", err)
+	}
+
+	server, _ := cmd.Flags().GetString("server")
+	if server != "" {
+		model, _ := cmd.Flags().GetString("model")
+		return fetchAndPrintRemoteReport(cmd, strings.TrimRight(server, "/"), experimentID.String(), model)
 	}
 
 	store, err := connectDB()
