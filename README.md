@@ -214,6 +214,7 @@ notes/                    # implementation notes + planning
 
 - [docs/QUICKSTART.md](docs/QUICKSTART.md)
 - [docs/LOCAL_DEV_SETUP.md](docs/LOCAL_DEV_SETUP.md)
+- [docs/E2E_DEMO_PLAN.md](docs/E2E_DEMO_PLAN.md)
 - [docs/OTLP_RECEIVER.md](docs/OTLP_RECEIVER.md)
 - [docs/TESTING_OTLP.md](docs/TESTING_OTLP.md)
 - [docs/DEBUGGING_OTLP.md](docs/DEBUGGING_OTLP.md)
@@ -225,4 +226,5 @@ notes/                    # implementation notes + planning
 
 Built for MCP_HACK//26 (Secure & Govern MCP), with a governance-first focus:
 - detect production drift from known-good behavior
-- eventually gate model/prompt rollouts with deterministic replay
+- gate model/prompt rollouts with replay-driven behavior comparison
+- make `agentgateway` the primary capture and replay integration
