@@ -183,6 +183,14 @@ make fmt
 
 - Pure unit packages (`pkg/config`, `pkg/drift`, `pkg/otelreceiver`, `pkg/agwclient`, `pkg/diff`, `pkg/replay`) run without PostgreSQL.
 - Storage tests (`pkg/storage`) require a reachable PostgreSQL instance at `CMDR_POSTGRES_URL`.
+- Freeze contract e2e test (`test/e2e/freeze_contract_test.go`) is opt-in:
+  - Start freeze-mcp (`python -m freeze_mcp.server`) against the same PostgreSQL.
+  - Run: `make test-e2e-freeze-contract`
+  - Optional endpoint overrides: `E2E_FREEZE_HEALTH_URL`, `E2E_FREEZE_MCP_URL`.
+- Replay + freeze e2e test (`test/e2e/replay_freeze_test.go`) is opt-in:
+  - Start CMDR (`cmdr serve`) and freeze-mcp (`python -m freeze_mcp.server`) against the same PostgreSQL.
+  - Run: `make test-e2e-replay-freeze`
+  - Optional endpoint overrides: `E2E_OTLP_HEALTH_URL`, `E2E_OTLP_INGEST_URL`, `E2E_FREEZE_HEALTH_URL`, `E2E_FREEZE_MCP_URL`.
 
 ## Project Layout
 
