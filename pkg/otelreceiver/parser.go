@@ -135,7 +135,7 @@ func (p *Parser) ParseLLMSpan(span ptrace.Span, resource pcommon.Resource) *stor
 
 // extractPrompt extracts prompt messages from gen_ai.prompt.* attributes
 func (p *Parser) extractPrompt(attrs pcommon.Map) storage.JSONB {
-	messages := []map[string]string{}
+	messages := []map[string]interface{}{}
 	index := 0
 
 	for {
@@ -149,10 +149,21 @@ func (p *Parser) extractPrompt(attrs pcommon.Map) storage.JSONB {
 			break
 		}
 
-		messages = append(messages, map[string]string{
+		message := map[string]interface{}{
 			"role":    roleAttr.Str(),
 			"content": contentAttr.Str(),
-		})
+		}
+		if attr, ok := attrs.Get(fmt.Sprintf("gen_ai.prompt.%d.name", index)); ok {
+			message["name"] = attr.Str()
+		}
+		if attr, ok := attrs.Get(fmt.Sprintf("gen_ai.prompt.%d.tool_call_id", index)); ok {
+			message["tool_call_id"] = attr.Str()
+		}
+		if rawToolCalls, ok := extractOptionalJSONAttr(attrs, fmt.Sprintf("gen_ai.prompt.%d.tool_calls", index)); ok {
+			message["tool_calls"] = rawToolCalls
+		}
+
+		messages = append(messages, message)
 
 		index++
 	}
@@ -161,7 +172,15 @@ func (p *Parser) extractPrompt(attrs pcommon.Map) storage.JSONB {
 		return storage.JSONB{}
 	}
 
-	return storage.JSONB{"messages": messages}
+	prompt := storage.JSONB{"messages": messages}
+	if tools, ok := extractOptionalJSONAttr(attrs, "gen_ai.request.tools"); ok {
+		prompt["tools"] = tools
+	}
+	if toolChoice, ok := extractOptionalJSONAttr(attrs, "gen_ai.request.tool_choice"); ok {
+		prompt["tool_choice"] = toolChoice
+	}
+
+	return prompt
 }
 
 // extractCompletion extracts completion from gen_ai.completion.* attributes
@@ -369,6 +388,28 @@ func valueToInterface(v pcommon.Value) interface{} {
 	}
 }
 
+func extractOptionalJSONAttr(attrs pcommon.Map, key string) (interface{}, bool) {
+	attr, ok := attrs.Get(key)
+	if !ok {
+		return nil, false
+	}
+
+	switch attr.Type() {
+	case pcommon.ValueTypeStr:
+		var decoded interface{}
+		if err := json.Unmarshal([]byte(attr.Str()), &decoded); err == nil {
+			return decoded, true
+		}
+		return attr.Str(), true
+	case pcommon.ValueTypeMap:
+		return attributesToJSON(attr.Map()), true
+	case pcommon.ValueTypeSlice:
+		return valueToInterface(attr), true
+	default:
+		return valueToInterface(attr), true
+	}
+}
+
 func eventsToJSON(events ptrace.SpanEventSlice) storage.JSONB {
 	result := make([]map[string]interface{}, events.Len())
 
@@ -407,9 +448,9 @@ func calculateArgsHash(args storage.JSONB) string {
 }
 
 // normalizeValue recursively normalizes a value for canonical JSON hashing.
-// - map keys are sorted by json.Marshal
-// - all numeric types are coerced to float64 for consistency
-//   (JSON numbers from Unmarshal are always float64, but Go code may produce int/int64)
+//   - map keys are sorted by json.Marshal
+//   - all numeric types are coerced to float64 for consistency
+//     (JSON numbers from Unmarshal are always float64, but Go code may produce int/int64)
 func normalizeValue(v interface{}) interface{} {
 	switch val := v.(type) {
 	case map[string]interface{}:

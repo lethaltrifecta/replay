@@ -86,6 +86,68 @@ func TestComplete_BaseURLTrailingSlash(t *testing.T) {
 	assert.Equal(t, "chatcmpl-slash", resp.ID)
 }
 
+func TestComplete_SendsToolsAndHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "baseline-trace-123", r.Header.Get("X-Freeze-Trace-ID"))
+
+		var req CompletionRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.Len(t, req.Tools, 1)
+		require.NotNil(t, req.Tools[0].Function)
+		assert.Equal(t, "calculator", req.Tools[0].Function.Name)
+
+		choice, ok := req.ToolChoice.(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "function", choice["type"])
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(CompletionResponse{
+			ID:    "chatcmpl-tools",
+			Model: "gpt-4o",
+			Choices: []Choice{
+				{Index: 0, Message: ChatMessage{Role: "assistant", Content: "Using tools"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(ClientConfig{
+		BaseURL:    srv.URL,
+		Timeout:    5 * time.Second,
+		MaxRetries: 0,
+	})
+
+	resp, err := client.Complete(context.Background(), &CompletionRequest{
+		Model:    "gpt-4o",
+		Messages: []ChatMessage{{Role: "user", Content: "Add 2 and 2"}},
+		Tools: []ToolDefinition{
+			{
+				Type: "function",
+				Function: &FunctionDefinition{
+					Name:        "calculator",
+					Description: "Add numbers",
+					Parameters: map[string]interface{}{
+						"type": "object",
+					},
+				},
+			},
+		},
+		ToolChoice: map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name": "calculator",
+			},
+		},
+		Headers: map[string]string{
+			"X-Freeze-Trace-ID": "baseline-trace-123",
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "chatcmpl-tools", resp.ID)
+}
+
 func TestComplete_RetryOn500(t *testing.T) {
 	var attempts atomic.Int32
 

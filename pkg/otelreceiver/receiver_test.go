@@ -249,6 +249,45 @@ func TestParser_ParseLLMSpan(t *testing.T) {
 	assert.Equal(t, "I'm doing great!", trace.Completion)
 }
 
+func TestParser_ParseLLMSpan_PreservesReplayToolMetadata(t *testing.T) {
+	log, _ := logger.New("debug")
+	parser := NewParser(log)
+
+	span := ptrace.NewSpan()
+	span.SetTraceID(pcommon.TraceID([16]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}))
+	span.SetSpanID(pcommon.SpanID([8]byte{2, 2, 2, 2, 2, 2, 2, 2}))
+	span.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+	span.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Now().Add(time.Second)))
+
+	span.Attributes().PutStr("gen_ai.request.model", "gpt-4o")
+	span.Attributes().PutStr("gen_ai.system", "openai")
+	span.Attributes().PutStr("gen_ai.prompt.0.role", "tool")
+	span.Attributes().PutStr("gen_ai.prompt.0.content", `{"result":4}`)
+	span.Attributes().PutStr("gen_ai.prompt.0.name", "calculator")
+	span.Attributes().PutStr("gen_ai.prompt.0.tool_call_id", "call-123")
+	span.Attributes().PutStr("gen_ai.prompt.0.tool_calls", `[{"id":"call-123","type":"function","function":{"name":"calculator","arguments":"{\"a\":2,\"b\":2}"}}]`)
+	span.Attributes().PutStr("gen_ai.request.tools", `[{"type":"function","function":{"name":"calculator","description":"Add numbers","parameters":{"type":"object"}}}]`)
+	span.Attributes().PutStr("gen_ai.request.tool_choice", `{"type":"function","function":{"name":"calculator"}}`)
+	span.Attributes().PutStr("gen_ai.completion.0.content", "Using calculator")
+
+	trace := parser.ParseLLMSpan(span, pcommon.NewResource())
+
+	require.NotNil(t, trace)
+	messages, ok := trace.Prompt["messages"].([]map[string]interface{})
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "calculator", messages[0]["name"])
+	assert.Equal(t, "call-123", messages[0]["tool_call_id"])
+
+	tools, ok := trace.Prompt["tools"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, tools, 1)
+
+	toolChoice, ok := trace.Prompt["tool_choice"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "function", toolChoice["type"])
+}
+
 func TestReceiver_New(t *testing.T) {
 	log, _ := logger.New("debug")
 	mock := &mockStorage{}

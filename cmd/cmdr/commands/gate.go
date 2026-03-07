@@ -405,6 +405,9 @@ func runGateReport(cmd *cobra.Command, args []string) error {
 			if verdict, ok := r.BehaviorDiff["verdict"].(string); ok {
 				cmd.Printf("  Verdict: %s\n", verdictDisplay(verdict))
 			}
+			if summary := formatFirstDivergence(r.FirstDivergence); summary != "" {
+				cmd.Printf("  First Divergence: %s\n", summary)
+			}
 		}
 	} else {
 		cmd.Printf("\nNo analysis results found.\n")
@@ -440,6 +443,10 @@ func printGateReport(cmd *cobra.Command, baselineTraceID, model string, experime
 		cmd.Printf("  response      %.2f  (jaccard=%.2f, length=%.2f)\n",
 			report.ResponseScore.Score, report.ResponseScore.ContentOverlap, report.ResponseScore.LengthSimilarity)
 	}
+	if summary := formatFirstDivergence(report.FirstDivergence); summary != "" {
+		cmd.Printf("\nFirst Divergence:\n")
+		cmd.Printf("  %s\n", summary)
+	}
 
 	if len(report.StepDiffs) > 0 {
 		cmd.Printf("\nStep Breakdown:\n")
@@ -453,4 +460,70 @@ func printGateReport(cmd *cobra.Command, baselineTraceID, model string, experime
 
 	cmd.Printf("\nTotals: token_delta=%+d  latency_delta=%+dms\n", report.TokenDelta, report.LatencyDelta)
 	cmd.Printf("Experiment: %s\n", experimentID)
+}
+
+func formatFirstDivergence(divergence storage.JSONB) string {
+	if len(divergence) == 0 {
+		return ""
+	}
+
+	switch divergenceType, _ := divergence["type"].(string); divergenceType {
+	case "tool_sequence":
+		toolIndex, _ := intValue(divergence["tool_index"])
+		baseline, _ := divergence["baseline"].(string)
+		variant, _ := divergence["variant"].(string)
+		return fmt.Sprintf("tool #%d changed: baseline=%q variant=%q", toolIndex, baseline, variant)
+	case "tool_count":
+		toolIndex, _ := intValue(divergence["tool_index"])
+		baselineCount, _ := intValue(divergence["baseline_count"])
+		variantCount, _ := intValue(divergence["variant_count"])
+		return fmt.Sprintf("tool count diverged at tool #%d: baseline=%d variant=%d", toolIndex, baselineCount, variantCount)
+	case "response_content":
+		stepIndex, _ := intValue(divergence["step_index"])
+		jaccard, _ := floatValue(divergence["jaccard"])
+		baselineExcerpt, _ := divergence["baseline_excerpt"].(string)
+		variantExcerpt, _ := divergence["variant_excerpt"].(string)
+		return fmt.Sprintf("step %d response changed (jaccard=%.2f): baseline=%q variant=%q", stepIndex, jaccard, baselineExcerpt, variantExcerpt)
+	case "step_count":
+		stepIndex, _ := intValue(divergence["step_index"])
+		baselineSteps, _ := intValue(divergence["baseline_steps"])
+		variantSteps, _ := intValue(divergence["variant_steps"])
+		return fmt.Sprintf("step count diverged at step %d: baseline=%d variant=%d", stepIndex, baselineSteps, variantSteps)
+	default:
+		return fmt.Sprintf("%v", divergence)
+	}
+}
+
+func intValue(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float32:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
+func floatValue(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
 }

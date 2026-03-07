@@ -19,12 +19,14 @@ import (
 type mockCompleter struct {
 	responses []*agwclient.CompletionResponse
 	errors    []error
+	requests  []*agwclient.CompletionRequest
 	calls     int
 }
 
 func (m *mockCompleter) Complete(ctx context.Context, req *agwclient.CompletionRequest) (*agwclient.CompletionResponse, error) {
 	idx := m.calls
 	m.calls++
+	m.requests = append(m.requests, req)
 	if idx < len(m.errors) && m.errors[idx] != nil {
 		return nil, m.errors[idx]
 	}
@@ -315,6 +317,96 @@ func TestEngine_Run_HappyPath(t *testing.T) {
 	}
 }
 
+func TestEngine_Run_ForwardsToolAwareRequestFields(t *testing.T) {
+	store := newMockStorage()
+	store.replayTraces["baseline-trace-123"] = []*storage.ReplayTrace{
+		makeBaselineStep(0, storage.JSONB{
+			"messages": []interface{}{
+				map[string]interface{}{"role": "system", "content": "Use tools safely"},
+				map[string]interface{}{
+					"role":         "tool",
+					"content":      `{"result":4}`,
+					"name":         "calculator",
+					"tool_call_id": "call-123",
+				},
+			},
+			"tools": []interface{}{
+				map[string]interface{}{
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":        "calculator",
+						"description": "Add numbers",
+						"parameters": map[string]interface{}{
+							"type": "object",
+						},
+					},
+				},
+			},
+			"tool_choice": map[string]interface{}{
+				"type": "function",
+				"function": map[string]interface{}{
+					"name": "calculator",
+				},
+			},
+		}, 100),
+	}
+
+	completer := &mockCompleter{
+		responses: []*agwclient.CompletionResponse{
+			{
+				ID:    "r1",
+				Model: "gpt-4o",
+				Choices: []agwclient.Choice{{
+					Message: agwclient.ChatMessage{
+						Role:    "assistant",
+						Content: "Calling calculator",
+						ToolCalls: []agwclient.ToolCallResponse{{
+							ID:   "call-123",
+							Type: "function",
+							Function: agwclient.FunctionCall{
+								Name:      "calculator",
+								Arguments: `{"a":2,"b":2}`,
+							},
+						}},
+					},
+				}},
+				Usage: agwclient.Usage{PromptTokens: 50, CompletionTokens: 20, TotalTokens: 70},
+			},
+		},
+	}
+
+	engine := NewEngine(store, completer)
+	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{
+		Model:    "gpt-4o",
+		Provider: "openai",
+		RequestHeaders: map[string]string{
+			"X-Freeze-Trace-ID": "baseline-trace-123",
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, completer.requests, 1)
+
+	req := completer.requests[0]
+	require.Len(t, req.Tools, 1)
+	require.NotNil(t, req.Tools[0].Function)
+	assert.Equal(t, "calculator", req.Tools[0].Function.Name)
+	assert.Equal(t, "baseline-trace-123", req.Headers["X-Freeze-Trace-ID"])
+	assert.Equal(t, "calculator", req.Messages[1].Name)
+	assert.Equal(t, "call-123", req.Messages[1].ToolCallID)
+
+	choice, ok := req.ToolChoice.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "function", choice["type"])
+
+	require.Len(t, result.Steps, 1)
+	assert.Equal(t, []string{"calculator"}, result.Steps[0].Metadata["replay_tool_names"])
+	assert.Equal(t, 0, result.Steps[0].Metadata["baseline_step_index"])
+	require.NotNil(t, result.Steps[0].Metadata["replay_tool_choice"])
+	require.NotNil(t, result.Steps[0].Metadata["tool_calls"])
+}
+
 func TestEngine_Run_StepFailure(t *testing.T) {
 	store := newMockStorage()
 	store.replayTraces["baseline-trace-123"] = []*storage.ReplayTrace{
@@ -536,6 +628,30 @@ func TestExtractMessages(t *testing.T) {
 			want: 2,
 		},
 		{
+			name: "messages with tool metadata",
+			prompt: storage.JSONB{
+				"messages": []interface{}{
+					map[string]interface{}{
+						"role":         "tool",
+						"content":      `{"result":4}`,
+						"name":         "calculator",
+						"tool_call_id": "call-123",
+						"tool_calls": []interface{}{
+							map[string]interface{}{
+								"id":   "call-123",
+								"type": "function",
+								"function": map[string]interface{}{
+									"name":      "calculator",
+									"arguments": `{"a":2,"b":2}`,
+								},
+							},
+						},
+					},
+				},
+			},
+			want: 1,
+		},
+		{
 			name:    "missing messages key",
 			prompt:  storage.JSONB{"other": "data"},
 			wantErr: true,
@@ -555,6 +671,11 @@ func TestExtractMessages(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				assert.Len(t, msgs, tt.want)
+				if tt.name == "messages with tool metadata" {
+					assert.Equal(t, "calculator", msgs[0].Name)
+					assert.Equal(t, "call-123", msgs[0].ToolCallID)
+					require.Len(t, msgs[0].ToolCalls, 1)
+				}
 			}
 		})
 	}

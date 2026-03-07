@@ -104,6 +104,12 @@ func TestPrintGateReport(t *testing.T) {
 		SimilarityScore: 0.9200,
 		Verdict:         "pass",
 		StepCount:       3,
+		FirstDivergence: storage.JSONB{
+			"type":       "tool_sequence",
+			"tool_index": 1,
+			"baseline":   "describe_pod",
+			"variant":    "delete_pod",
+		},
 		StepDiffs: []diff.StepDiff{
 			{StepIndex: 0, TokenDelta: 42},
 			{StepIndex: 1, TokenDelta: -18},
@@ -123,6 +129,8 @@ func TestPrintGateReport(t *testing.T) {
 	assert.Contains(t, output, "3 replayed")
 	assert.Contains(t, output, "0.9200")
 	assert.Contains(t, output, "PASS")
+	assert.Contains(t, output, "First Divergence")
+	assert.Contains(t, output, `baseline="describe_pod" variant="delete_pod"`)
 	assert.Contains(t, output, "Step Breakdown")
 	assert.Contains(t, output, "+42")
 	assert.Contains(t, output, "-18")
@@ -244,4 +252,18 @@ func TestResolveToolComparisonInputs_UsesSemanticWhenCapturesLoad(t *testing.T) 
 	require.Len(t, tools, 1)
 	assert.Equal(t, "get_user", tools[0].Name)
 	assert.Empty(t, errOut.String())
+}
+
+func TestFormatFirstDivergence_ResponseContent(t *testing.T) {
+	summary := formatFirstDivergence(storage.JSONB{
+		"type":             "response_content",
+		"step_index":       2,
+		"jaccard":          0.33,
+		"baseline_excerpt": "Investigate pod state first",
+		"variant_excerpt":  "Delete the pod immediately",
+	})
+
+	assert.Contains(t, summary, "step 2 response changed")
+	assert.Contains(t, summary, "Investigate pod state first")
+	assert.Contains(t, summary, "Delete the pod immediately")
 }

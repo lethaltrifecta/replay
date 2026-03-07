@@ -36,10 +36,10 @@ type Report struct {
 	LatencyDelta    int        `json:"latency_delta"` // total ms (variant - baseline)
 
 	// Semantic dimensions (populated by CompareAll, nil when using Compare)
-	ToolCallScore    *ToolCallScore `json:"tool_call_score,omitempty"`
-	RiskScore        *RiskScore     `json:"risk_score,omitempty"`
-	ResponseScore    *ResponseScore `json:"response_score,omitempty"`
-	FirstDivergence  storage.JSONB  `json:"first_divergence,omitempty"`
+	ToolCallScore   *ToolCallScore `json:"tool_call_score,omitempty"`
+	RiskScore       *RiskScore     `json:"risk_score,omitempty"`
+	ResponseScore   *ResponseScore `json:"response_score,omitempty"`
+	FirstDivergence storage.JSONB  `json:"first_divergence,omitempty"`
 }
 
 // CompareInput holds all data needed for a full 6-dimension comparison.
@@ -300,9 +300,11 @@ func findFirstDivergence(baseline, variant []*storage.ReplayTrace, baseTools, va
 		j := jaccard(baseline[i].Completion, variant[i].Completion)
 		if j < 0.5 {
 			return storage.JSONB{
-				"step_index": i,
-				"type":       "response_content",
-				"jaccard":    j,
+				"step_index":       i,
+				"type":             "response_content",
+				"jaccard":          j,
+				"baseline_excerpt": excerpt(baseline[i].Completion, 120),
+				"variant_excerpt":  excerpt(variant[i].Completion, 120),
 			}
 		}
 	}
@@ -318,6 +320,16 @@ func findFirstDivergence(baseline, variant []*storage.ReplayTrace, baseTools, va
 	}
 
 	return storage.JSONB{}
+}
+
+func excerpt(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // ToAnalysisResult maps a Report into a storage.AnalysisResult for persistence.
