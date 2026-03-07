@@ -90,9 +90,10 @@ func (p *Parser) ParseLLMSpan(span ptrace.Span, resource pcommon.Resource) *stor
 	spanID := span.SpanID().String()
 	runID := traceID // Use trace ID as run ID for now
 
-	// Extract model and provider
+	// Extract model and provider. agentgateway natively emits
+	// gen_ai.provider.name; older/vendor-specific traces may still use gen_ai.system.
 	model := getStringAttr(attrs, "gen_ai.request.model", "unknown")
-	provider := getStringAttr(attrs, "gen_ai.system", "unknown")
+	provider := getStringAttrAny(attrs, []string{"gen_ai.provider.name", "gen_ai.system"}, "unknown")
 
 	// Extract prompt (messages)
 	prompt := p.extractPrompt(attrs)
@@ -108,8 +109,8 @@ func (p *Parser) ParseLLMSpan(span ptrace.Span, resource pcommon.Resource) *stor
 	parameters := p.extractParameters(attrs)
 
 	// Extract token counts
-	promptTokens := getIntAttr(attrs, "gen_ai.usage.input_tokens", 0)
-	completionTokens := getIntAttr(attrs, "gen_ai.usage.output_tokens", 0)
+	promptTokens := getIntAttrAny(attrs, []string{"gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens"}, 0)
+	completionTokens := getIntAttrAny(attrs, []string{"gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens"}, 0)
 	totalTokens := promptTokens + completionTokens
 
 	// Calculate latency
@@ -347,9 +348,27 @@ func getStringAttr(attrs pcommon.Map, key string, defaultVal string) string {
 	return defaultVal
 }
 
+func getStringAttrAny(attrs pcommon.Map, keys []string, defaultVal string) string {
+	for _, key := range keys {
+		if attr, ok := attrs.Get(key); ok {
+			return attr.Str()
+		}
+	}
+	return defaultVal
+}
+
 func getIntAttr(attrs pcommon.Map, key string, defaultVal int) int {
 	if attr, ok := attrs.Get(key); ok {
 		return int(attr.Int())
+	}
+	return defaultVal
+}
+
+func getIntAttrAny(attrs pcommon.Map, keys []string, defaultVal int) int {
+	for _, key := range keys {
+		if attr, ok := attrs.Get(key); ok {
+			return int(attr.Int())
+		}
 	}
 	return defaultVal
 }

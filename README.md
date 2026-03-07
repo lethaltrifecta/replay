@@ -35,7 +35,7 @@ agentgateway (or any OTLP emitter)
         v
 +-------------------------------+       +-------------------------------+
 | PostgreSQL                    |       | agentgateway                  |
-| - otel_traces                 |       | (OpenAI-compatible LLM proxy) |
+| - otel_traces                 |       | (LLM + MCP proxy)             |
 | - replay_traces               |       +-------------------------------+
 | - tool_captures               |                   ^
 | - baselines / drift_results   |                   |
@@ -223,6 +223,7 @@ notes/                    # implementation notes + planning
 - [docs/QUICKSTART.md](docs/QUICKSTART.md)
 - [docs/LOCAL_DEV_SETUP.md](docs/LOCAL_DEV_SETUP.md)
 - [docs/E2E_DEMO_PLAN.md](docs/E2E_DEMO_PLAN.md)
+- [docs/AGENTGATEWAY_CAPTURE.md](docs/AGENTGATEWAY_CAPTURE.md)
 - [docs/OTLP_RECEIVER.md](docs/OTLP_RECEIVER.md)
 - [docs/TESTING_OTLP.md](docs/TESTING_OTLP.md)
 - [docs/DEBUGGING_OTLP.md](docs/DEBUGGING_OTLP.md)

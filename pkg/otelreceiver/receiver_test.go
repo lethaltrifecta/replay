@@ -249,6 +249,61 @@ func TestParser_ParseLLMSpan(t *testing.T) {
 	assert.Equal(t, "I'm doing great!", trace.Completion)
 }
 
+func TestParser_ParseLLMSpan_AgentgatewayNativeAttributes(t *testing.T) {
+	log, _ := logger.New("debug")
+	parser := NewParser(log)
+
+	span := ptrace.NewSpan()
+	span.SetTraceID(pcommon.TraceID([16]byte{9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 9, 8, 7, 6, 5, 4}))
+	span.SetSpanID(pcommon.SpanID([8]byte{8, 7, 6, 5, 4, 3, 2, 1}))
+	span.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+	span.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Now().Add(time.Second)))
+
+	span.Attributes().PutStr("gen_ai.request.model", "gpt-4o-mini")
+	span.Attributes().PutStr("gen_ai.provider.name", "openai")
+	span.Attributes().PutStr("gen_ai.prompt.0.role", "user")
+	span.Attributes().PutStr("gen_ai.prompt.0.content", "Summarize the outage.")
+	span.Attributes().PutStr("gen_ai.completion.0.content", "The outage appears to be database-related.")
+	span.Attributes().PutInt("gen_ai.usage.input_tokens", 12)
+	span.Attributes().PutInt("gen_ai.usage.output_tokens", 9)
+
+	trace := parser.ParseLLMSpan(span, pcommon.NewResource())
+
+	require.NotNil(t, trace)
+	assert.Equal(t, "openai", trace.Provider)
+	assert.Equal(t, "gpt-4o-mini", trace.Model)
+	assert.Equal(t, 12, trace.PromptTokens)
+	assert.Equal(t, 9, trace.CompletionTokens)
+	assert.Equal(t, 21, trace.TotalTokens)
+}
+
+func TestParser_ParseLLMSpan_AgentgatewayTokenAliases(t *testing.T) {
+	log, _ := logger.New("debug")
+	parser := NewParser(log)
+
+	span := ptrace.NewSpan()
+	span.SetTraceID(pcommon.TraceID([16]byte{4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9}))
+	span.SetSpanID(pcommon.SpanID([8]byte{1, 3, 5, 7, 9, 2, 4, 6}))
+	span.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+	span.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Now().Add(time.Second)))
+
+	span.Attributes().PutStr("gen_ai.request.model", "gemini-1.5-flash")
+	span.Attributes().PutStr("gen_ai.system", "gemini")
+	span.Attributes().PutStr("gen_ai.prompt.0.role", "user")
+	span.Attributes().PutStr("gen_ai.prompt.0.content", "Check deployment health.")
+	span.Attributes().PutStr("gen_ai.completion.0.content", "I will inspect the deployment.")
+	span.Attributes().PutInt("gen_ai.usage.prompt_tokens", 14)
+	span.Attributes().PutInt("gen_ai.usage.completion_tokens", 6)
+
+	trace := parser.ParseLLMSpan(span, pcommon.NewResource())
+
+	require.NotNil(t, trace)
+	assert.Equal(t, "gemini", trace.Provider)
+	assert.Equal(t, 14, trace.PromptTokens)
+	assert.Equal(t, 6, trace.CompletionTokens)
+	assert.Equal(t, 20, trace.TotalTokens)
+}
+
 func TestParser_ParseLLMSpan_PreservesReplayToolMetadata(t *testing.T) {
 	log, _ := logger.New("debug")
 	parser := NewParser(log)
