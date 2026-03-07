@@ -362,6 +362,13 @@ func TestCalculateArgsHash_Deterministic(t *testing.T) {
 		assert.Equal(t, hash, calculateArgsHash(args2))
 		assert.NotEmpty(t, hash)
 	})
+
+	t.Run("large ints remain distinct", func(t *testing.T) {
+		args1 := storage.JSONB{"n": int64(1 << 53)}
+		args2 := storage.JSONB{"n": int64(1<<53 + 1)}
+
+		assert.NotEqual(t, calculateArgsHash(args1), calculateArgsHash(args2))
+	})
 }
 
 func TestReceiverHandleHTTPTraces_JSON(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -449,8 +450,9 @@ func calculateArgsHash(args storage.JSONB) string {
 
 // normalizeValue recursively normalizes a value for canonical JSON hashing.
 //   - map keys are sorted by json.Marshal
-//   - all numeric types are coerced to float64 for consistency
-//     (JSON numbers from Unmarshal are always float64, but Go code may produce int/int64)
+//   - integers stay integers to avoid precision collapse for large values
+//   - whole floats become integers so 2 and 2.0 hash identically
+//   - non-whole floats remain floats
 func normalizeValue(v interface{}) interface{} {
 	switch val := v.(type) {
 	case map[string]interface{}:
@@ -472,21 +474,50 @@ func normalizeValue(v interface{}) interface{} {
 		}
 		return normalized
 	case int:
-		return float64(val)
+		return int64(val)
 	case int64:
-		return float64(val)
+		return val
 	case int32:
-		return float64(val)
+		return int64(val)
+	case int16:
+		return int64(val)
+	case int8:
+		return int64(val)
+	case uint:
+		return uint64(val)
+	case uint64:
+		return val
+	case uint32:
+		return uint64(val)
+	case uint16:
+		return uint64(val)
+	case uint8:
+		return uint64(val)
 	case float32:
-		return float64(val)
+		return normalizeFloat(float64(val))
+	case float64:
+		return normalizeFloat(val)
 	case json.Number:
+		if i, err := val.Int64(); err == nil {
+			return i
+		}
 		if f, err := val.Float64(); err == nil {
-			return f
+			return normalizeFloat(f)
 		}
 		return val.String()
 	default:
 		return v
 	}
+}
+
+func normalizeFloat(v float64) interface{} {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return v
+	}
+	if math.Trunc(v) == v && v >= math.MinInt64 && v <= math.MaxInt64 {
+		return int64(v)
+	}
+	return v
 }
 
 func determineRiskClass(toolName string, args storage.JSONB) string {
