@@ -32,4 +32,5 @@ func init() {
 	rootCmd.AddCommand(groundTruthCmd)
 	rootCmd.AddCommand(driftCmd)
 	rootCmd.AddCommand(gateCmd)
+	rootCmd.AddCommand(demoCmd)
 }

@@ -139,4 +139,13 @@ docker-run: ## Run Docker container
 	@echo "Running Docker container..."
 	docker run -p 8080:8080 -p 4317:4317 -p 4318:4318 $(BINARY_NAME):latest
 
+# ============================================================================
+# Demo
+# ============================================================================
+
+.PHONY: demo
+demo: build ## Run the hackathon demo (requires PostgreSQL: make dev-up)
+	@echo "Starting demo (requires PostgreSQL: make dev-up)..."
+	@bash scripts/demo.sh
+
 .DEFAULT_GOAL := help
