@@ -50,6 +50,8 @@ func init() {
 	gateCheckCmd.Flags().String("baseline", "", "Baseline trace ID to replay (required)")
 	gateCheckCmd.Flags().String("model", "", "Variant model name (required)")
 	gateCheckCmd.Flags().String("provider", "", "Variant provider (optional)")
+	gateCheckCmd.Flags().String("freeze-trace-id", "", "Replay header convenience flag for X-Freeze-Trace-ID")
+	gateCheckCmd.Flags().StringArray("request-header", nil, "Additional replay request header in KEY=VALUE form (repeatable)")
 	gateCheckCmd.Flags().Float64("threshold", 0.8, "Similarity threshold for pass verdict")
 	gateCheckCmd.Flags().String("server", "", "CMDR server URL for remote execution (e.g. http://localhost:8080)")
 	_ = gateCheckCmd.MarkFlagRequired("baseline")
@@ -63,6 +65,8 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 	baselineTraceID, _ := cmd.Flags().GetString("baseline")
 	model, _ := cmd.Flags().GetString("model")
 	provider, _ := cmd.Flags().GetString("provider")
+	freezeTraceID, _ := cmd.Flags().GetString("freeze-trace-id")
+	requestHeaderSpecs, _ := cmd.Flags().GetStringArray("request-header")
 	threshold, _ := cmd.Flags().GetFloat64("threshold")
 	server, _ := cmd.Flags().GetString("server")
 
@@ -70,14 +74,19 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--threshold must be between 0.0 and 1.0, got %.2f", threshold)
 	}
 
+	requestHeaders, err := buildReplayHeaders(freezeTraceID, requestHeaderSpecs)
+	if err != nil {
+		return err
+	}
+
 	if server != "" {
 		return runGateCheckRemote(cmd, server, baselineTraceID, model, provider, threshold)
 	}
 
-	return runGateCheckLocal(cmd, baselineTraceID, model, provider, threshold)
+	return runGateCheckLocal(cmd, baselineTraceID, model, provider, requestHeaders, threshold)
 }
 
-func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider string, threshold float64) error {
+func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider string, requestHeaders map[string]string, threshold float64) error {
 	// Load config and validate agentgateway is configured
 	cfg, err := config.Load()
 	if err != nil {
@@ -104,8 +113,9 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 
 	// Build variant config
 	variant := replay.VariantConfig{
-		Model:    model,
-		Provider: provider,
+		Model:          model,
+		Provider:       provider,
+		RequestHeaders: requestHeaders,
 	}
 
 	// Run replay
@@ -526,4 +536,25 @@ func floatValue(v interface{}) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func buildReplayHeaders(freezeTraceID string, headerSpecs []string) (map[string]string, error) {
+	headers := map[string]string{}
+	if freezeTraceID != "" {
+		headers["X-Freeze-Trace-ID"] = freezeTraceID
+	}
+
+	for _, spec := range headerSpecs {
+		key, value, ok := strings.Cut(spec, "=")
+		if !ok || key == "" {
+			return nil, fmt.Errorf("invalid --request-header %q: expected KEY=VALUE", spec)
+		}
+		headers[key] = value
+	}
+
+	if len(headers) == 0 {
+		return nil, nil
+	}
+
+	return headers, nil
 }

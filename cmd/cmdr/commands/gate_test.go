@@ -267,3 +267,23 @@ func TestFormatFirstDivergence_ResponseContent(t *testing.T) {
 	assert.Contains(t, summary, "Investigate pod state first")
 	assert.Contains(t, summary, "Delete the pod immediately")
 }
+
+func TestBuildReplayHeaders(t *testing.T) {
+	headers, err := buildReplayHeaders("baseline-123", []string{
+		"X-Debug=1",
+		"X-Scenario=incident-triage",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "baseline-123", headers["X-Freeze-Trace-ID"])
+	assert.Equal(t, "1", headers["X-Debug"])
+	assert.Equal(t, "incident-triage", headers["X-Scenario"])
+}
+
+func TestBuildReplayHeaders_InvalidSpec(t *testing.T) {
+	headers, err := buildReplayHeaders("", []string{"not-valid"})
+
+	require.Error(t, err)
+	assert.Nil(t, headers)
+	assert.Contains(t, err.Error(), "expected KEY=VALUE")
+}
