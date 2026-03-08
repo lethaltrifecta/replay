@@ -49,12 +49,16 @@ Minimal tracing config:
 config:
   tracing:
     otlpEndpoint: http://localhost:4317
+    randomSampling: true
     fields:
       add:
         gen_ai.system: 'llm.provider'
         gen_ai.prompt: 'flattenRecursive(llm.prompt)'
         gen_ai.completion: 'flattenRecursive(llm.completion.map(c, {"role":"assistant", "content": c}))'
 ```
+
+The exact working local config is checked in at `scripts/agentgateway-cmdr-capture.yaml`.
+Keep `randomSampling: true` for the demo path so requests without an incoming trace context still generate spans.
 
 Why this shape works:
 
@@ -71,6 +75,28 @@ For the real capture epic, this means:
 - real LLM capture through `agentgateway`: ready now
 - MCP tool capture via separate MCP spans: follow-up parser/storage work
 - tool capture from the agent driver itself: still a valid fallback if MCP span parsing is not enough
+
+## Live Validation Result
+
+The local no-secrets capture path is now proven:
+
+1. `cmdr serve` receives OTLP on `4317`
+2. `agentgateway` runs locally from the sibling clone
+3. a mock OpenAI-compatible upstream answers `/v1/chat/completions`
+4. a request through `agentgateway` lands in both `otel_traces` and `replay_traces`
+
+The replay row shape from the live run was:
+
+- provider: `openai`
+- model: `mock-model`
+- prompt: `Explain the outage briefly.`
+- completion: `Mock response from local upstream.`
+
+Repo assets for rerunning that flow:
+
+- `scripts/agentgateway-cmdr-capture.yaml`
+- `scripts/mock_openai_upstream.py`
+- `scripts/test-agentgateway-capture.sh`
 
 ## Recommended Integration Sequence
 

@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+config:
+  tracing:
+    otlpEndpoint: http://localhost:4317
+    randomSampling: true
+    fields:
+      add:
+        gen_ai.system: 'llm.provider'
+        gen_ai.prompt: 'flattenRecursive(llm.prompt)'
+        gen_ai.completion: 'flattenRecursive(llm.completion.map(c, {"role":"assistant", "content": c}))'
+
+binds:
+- port: 3001
+  listeners:
+  - name: llm
+    protocol: HTTP
+    routes:
+    - name: llm
+      backends:
+      - ai:
+          name: mock-openai
+          hostOverride: 127.0.0.1:18080
+          pathOverride: /v1/chat/completions
+          provider:
+            openAI:
+              model: mock-model
+          policies:
+            ai:
+              routes:
+                /v1/chat/completions: completions
+                "*": passthrough
