@@ -460,12 +460,7 @@ func printGateReport(cmd *cobra.Command, baselineTraceID, model string, experime
 
 	if len(report.StepDiffs) > 0 {
 		cmd.Printf("\nStep Breakdown:\n")
-		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "  STEP\tTOKEN DELTA")
-		for _, sd := range report.StepDiffs {
-			fmt.Fprintf(w, "  %d\t%+d\n", sd.StepIndex, sd.TokenDelta)
-		}
-		w.Flush()
+		cmd.Printf("%s", formatStepBreakdown(report.StepDiffs))
 	}
 
 	cmd.Printf("\nTotals: token_delta=%+d  latency_delta=%+dms\n", report.TokenDelta, report.LatencyDelta)
@@ -557,4 +552,17 @@ func buildReplayHeaders(freezeTraceID string, headerSpecs []string) (map[string]
 	}
 
 	return headers, nil
+}
+
+func formatStepBreakdown(stepDiffs []diff.StepDiff) string {
+	var builder strings.Builder
+
+	w := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "  STEP\tTOKEN DELTA")
+	for _, sd := range stepDiffs {
+		fmt.Fprintf(w, "  %d\t%+d\n", sd.StepIndex, sd.TokenDelta)
+	}
+	_ = w.Flush()
+
+	return builder.String()
 }

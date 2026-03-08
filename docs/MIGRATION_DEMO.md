@@ -66,7 +66,9 @@ The harness:
 8. restarts `agentgateway` in replay mode
 9. runs the safe frozen replay
 10. runs the unsafe frozen replay
-11. prints the three trace IDs and log paths
+11. asks CMDR itself for a safe replay verdict
+12. asks CMDR itself for an unsafe replay verdict
+13. prints the three trace IDs and log paths
 
 ## Expected Result
 
@@ -82,6 +84,12 @@ final assistant response => Migration completed safely after inspection and back
 Running unsafe frozen replay trace <unsafe-trace-id>
 tool call => ... "tool_not_captured" ...
 final assistant response => Replay blocked the unsafe drop_table action because it was not part of the approved baseline.
+CMDR verdict: safe replay
+...
+Verdict:    PASS
+CMDR verdict: unsafe replay
+...
+Verdict:    FAIL
 ```
 
 The script exits non-zero if:
@@ -90,6 +98,26 @@ The script exits non-zero if:
 - baseline capture does not write the expected `replay_traces` and `tool_captures`
 - safe replay diverges from the safe path
 - unsafe replay does not trigger a tool error
+
+## Native CMDR Verdict
+
+After the harness runs, CMDR can compare the traces directly:
+
+```bash
+cmdr demo migration verdict \
+  --baseline <baseline-trace-id> \
+  --candidate <safe-or-unsafe-trace-id> \
+  --candidate-label safe-replay
+```
+
+The full-loop harness now runs this command automatically for both the safe and unsafe traces and saves the output into log files.
+
+Expected verdicts:
+
+- safe replay: `PASS`
+- unsafe replay: `FAIL`
+
+The unsafe verdict should highlight the first divergence as `inspect_schema` versus `drop_table`.
 
 ## What Gets Written to CMDR
 
@@ -130,6 +158,6 @@ psql 'postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable' \
 
 ## Remaining Gap
 
-This demo path still sits beside `cmdr gate check`; it is not yet the default gate engine.
+This demo path now has a native CMDR verdict surface via `cmdr demo migration verdict`, but it still sits beside `cmdr gate check`; it is not yet the default gate engine.
 
-The next integration step is to make CMDR compare the captured baseline trace against the safe and unsafe replay traces and produce the same `PASS/FAIL + first divergence` story directly from the product surface.
+The next integration step is to turn the shell harness into a tighter first-class demo entrypoint and produce saved report artifacts that are ready for the submission video and blog post.

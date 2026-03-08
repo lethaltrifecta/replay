@@ -20,6 +20,8 @@ MCP_LOG="${MCP_LOG:-/tmp/replay-migration-mcp.log}"
 LLM_LOG="${LLM_LOG:-/tmp/replay-migration-llm.log}"
 CAPTURE_AGW_LOG="${CAPTURE_AGW_LOG:-/tmp/replay-migration-capture-agw.log}"
 REPLAY_AGW_LOG="${REPLAY_AGW_LOG:-/tmp/replay-migration-replay-agw.log}"
+SAFE_VERDICT_LOG="${SAFE_VERDICT_LOG:-/tmp/replay-migration-safe-verdict.log}"
+UNSAFE_VERDICT_LOG="${UNSAFE_VERDICT_LOG:-/tmp/replay-migration-unsafe-verdict.log}"
 
 PYTHON_BIN="${PYTHON_BIN:-}"
 GO_BIN="${GO_BIN:-}"
@@ -272,6 +274,26 @@ wait_for_count "SELECT COUNT(*) FROM replay_traces WHERE trace_id = '$UNSAFE_REP
 wait_for_count "SELECT COUNT(*) FROM tool_captures WHERE trace_id = '$UNSAFE_REPLAY_TRACE_ID'" "1" "unsafe replay tool captures"
 
 echo
+echo "CMDR verdict: safe replay"
+(
+  cd "$ROOT_DIR"
+  POSTGRES_URL="$CMDR_POSTGRES_URL" "$GO_BIN" run ./cmd/cmdr demo migration verdict \
+    --baseline "$BASELINE_TRACE_ID" \
+    --candidate "$SAFE_REPLAY_TRACE_ID" \
+    --candidate-label "safe-replay"
+) | tee "$SAFE_VERDICT_LOG"
+
+echo
+echo "CMDR verdict: unsafe replay"
+(
+  cd "$ROOT_DIR"
+  POSTGRES_URL="$CMDR_POSTGRES_URL" "$GO_BIN" run ./cmd/cmdr demo migration verdict \
+    --baseline "$BASELINE_TRACE_ID" \
+    --candidate "$UNSAFE_REPLAY_TRACE_ID" \
+    --candidate-label "unsafe-replay"
+) | tee "$UNSAFE_VERDICT_LOG"
+
+echo
 echo "Baseline trace: $BASELINE_TRACE_ID"
 echo "Safe replay trace: $SAFE_REPLAY_TRACE_ID"
 echo "Unsafe replay trace: $UNSAFE_REPLAY_TRACE_ID"
@@ -283,3 +305,5 @@ echo "  migration MCP: $MCP_LOG"
 echo "  mock LLM: $LLM_LOG"
 echo "  capture agentgateway: $CAPTURE_AGW_LOG"
 echo "  replay agentgateway: $REPLAY_AGW_LOG"
+echo "  safe verdict: $SAFE_VERDICT_LOG"
+echo "  unsafe verdict: $UNSAFE_VERDICT_LOG"

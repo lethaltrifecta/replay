@@ -28,10 +28,11 @@ Completed on the current branch:
 - MCP replay routed through `agentgateway`, not just AI traffic
 - a purpose-built database migration demo agent with safe and unsafe replay paths
 - a runnable verification harness in `make test-migration-demo-full-loop`
+- a native CMDR verdict command for the migration demo traces
 
 Current next step:
 
-- surface the migration demo traces through CMDR's own `PASS/FAIL + first divergence` product path instead of a side harness
+- tighten the full-loop path into a first-class demo entrypoint and save report artifacts for the video/blog workflow
 
 ## Winning Thesis
 
