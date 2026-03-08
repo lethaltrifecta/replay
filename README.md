@@ -159,6 +159,12 @@ cmdr demo migration run
 
 This writes a self-contained artifact bundle with logs, structured results, a markdown report, a judge highlight, and a demo script.
 
+Show the newest saved migration demo bundle:
+
+```bash
+cmdr demo migration latest
+```
+
 ## Command Status
 
 - `cmdr serve`: implemented
@@ -170,6 +176,7 @@ This writes a self-contained artifact bundle with logs, structured results, a ma
 - `cmdr gate report`: implemented
 - `cmdr demo {seed,gate}`: implemented (deterministic hackathon demo commands)
 - `cmdr demo migration run`: implemented
+- `cmdr demo migration latest`: implemented
 - `cmdr demo migration verdict`: implemented
 - `cmdr experiment *`: scaffold only (prints not implemented)
 - `cmdr eval *`: scaffold only (prints not implemented)
@@ -204,6 +211,7 @@ make fmt
 - Migration demo full-loop harness:
   - Uses Docker PostgreSQL, CMDR, agentgateway, a mock migration MCP server, and freeze-mcp.
   - Preferred entrypoint: `cmdr demo migration run`
+  - Latest artifact summary: `cmdr demo migration latest`
   - Run: `make test-migration-demo-full-loop`
   - Native verdict: `cmdr demo migration verdict --baseline <trace> --candidate <trace>`
   - Full runbook: [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md)

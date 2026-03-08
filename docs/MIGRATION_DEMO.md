@@ -58,6 +58,18 @@ This command:
 - writes `run-summary.json`, `report.json`, `report.md`, `judge-highlight.md`, and `demo-script.md`
 - prints the safe and unsafe CMDR verdicts live
 
+To jump back to the newest saved bundle later:
+
+```bash
+cmdr demo migration latest
+```
+
+Useful variants:
+
+- `cmdr demo migration latest --artifact report`
+- `cmdr demo migration latest --artifact highlight`
+- `cmdr demo migration latest --json`
+
 Fallback developer harness:
 
 Run:

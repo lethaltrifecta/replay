@@ -46,3 +46,8 @@ temp/
 # Build artifacts
 dist/
 build/
+artifacts/
+
+# Python cache
+__pycache__/
+scripts/__pycache__/

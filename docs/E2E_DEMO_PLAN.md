@@ -31,6 +31,7 @@ Completed on the current branch:
 - a native CMDR verdict command for the migration demo traces
 - a first-class `cmdr demo migration run` entrypoint with saved report artifacts
 - launch-oriented artifacts (`judge-highlight.md`, `demo-script.md`) emitted on each full run
+- a `cmdr demo migration latest` convenience command for finding the newest artifact bundle
 
 Current next step:
 

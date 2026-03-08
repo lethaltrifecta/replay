@@ -46,6 +46,15 @@ var demoMigrationRunCmd = &cobra.Command{
 	SilenceUsage: true,
 }
 
+var demoMigrationLatestCmd = &cobra.Command{
+	Use:          "latest",
+	Short:        "Show the newest migration demo artifact bundle",
+	Long:         `Finds the most recent migration demo artifact directory and prints the key report paths and verdict summary.`,
+	Args:         cobra.NoArgs,
+	RunE:         runMigrationLatest,
+	SilenceUsage: true,
+}
+
 var demoMigrationVerdictCmd = &cobra.Command{
 	Use:          "verdict",
 	Short:        "Compare migration demo traces and print a verdict",
@@ -60,6 +69,7 @@ func init() {
 	demoCmd.AddCommand(demoGateCmd)
 	demoCmd.AddCommand(demoMigrationCmd)
 	demoMigrationCmd.AddCommand(demoMigrationRunCmd)
+	demoMigrationCmd.AddCommand(demoMigrationLatestCmd)
 	demoMigrationCmd.AddCommand(demoMigrationVerdictCmd)
 
 	demoMigrationRunCmd.Flags().String("report-dir", "", "Directory to store run logs and report artifacts (default: ./artifacts/migration-demo/<timestamp>)")
@@ -68,6 +78,10 @@ func init() {
 	demoMigrationRunCmd.Flags().String("agentgateway-dir", "", "Path to the local agentgateway checkout (defaults to ../agentgateway)")
 	demoMigrationRunCmd.Flags().String("freeze-dir", "", "Path to the local freeze-mcp checkout (defaults to ../freeze-mcp)")
 	demoMigrationRunCmd.Flags().Float64("threshold", 0.8, "Similarity threshold used for the saved PASS/FAIL report")
+
+	demoMigrationLatestCmd.Flags().String("artifacts-root", "", "Root directory that contains migration demo artifact bundles (default: ./artifacts/migration-demo)")
+	demoMigrationLatestCmd.Flags().Bool("json", false, "Print the latest artifact metadata as JSON")
+	demoMigrationLatestCmd.Flags().String("artifact", "", "Print only a single path: dir|summary|json|report|highlight|script|run-log|safe-verdict|unsafe-verdict")
 
 	demoMigrationVerdictCmd.Flags().String("baseline", "", "Baseline trace ID to compare against (required)")
 	demoMigrationVerdictCmd.Flags().String("candidate", "", "Candidate trace ID to evaluate (required)")
