@@ -224,6 +224,7 @@ notes/                    # implementation notes + planning
 - [docs/LOCAL_DEV_SETUP.md](docs/LOCAL_DEV_SETUP.md)
 - [docs/E2E_DEMO_PLAN.md](docs/E2E_DEMO_PLAN.md)
 - [docs/AGENTGATEWAY_CAPTURE.md](docs/AGENTGATEWAY_CAPTURE.md)
+- [docs/FREEZE_AGENT_LOOP.md](docs/FREEZE_AGENT_LOOP.md)
 - [docs/OTLP_RECEIVER.md](docs/OTLP_RECEIVER.md)
 - [docs/TESTING_OTLP.md](docs/TESTING_OTLP.md)
 - [docs/DEBUGGING_OTLP.md](docs/DEBUGGING_OTLP.md)
