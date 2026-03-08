@@ -191,6 +191,10 @@ make fmt
   - Start CMDR (`cmdr serve`) and freeze-mcp (`python -m freeze_mcp.server`) against the same PostgreSQL.
   - Run: `make test-e2e-replay-freeze`
   - Optional endpoint overrides: `E2E_OTLP_HEALTH_URL`, `E2E_OTLP_INGEST_URL`, `E2E_FREEZE_HEALTH_URL`, `E2E_FREEZE_MCP_URL`.
+- Migration demo full-loop harness:
+  - Uses Docker PostgreSQL, CMDR, agentgateway, a mock migration MCP server, and freeze-mcp.
+  - Run: `make test-migration-demo-full-loop`
+  - Full runbook: [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md)
 
 ## Project Layout
 
@@ -225,6 +229,7 @@ notes/                    # implementation notes + planning
 - [docs/E2E_DEMO_PLAN.md](docs/E2E_DEMO_PLAN.md)
 - [docs/AGENTGATEWAY_CAPTURE.md](docs/AGENTGATEWAY_CAPTURE.md)
 - [docs/FREEZE_AGENT_LOOP.md](docs/FREEZE_AGENT_LOOP.md)
+- [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md)
 - [docs/OTLP_RECEIVER.md](docs/OTLP_RECEIVER.md)
 - [docs/TESTING_OTLP.md](docs/TESTING_OTLP.md)
 - [docs/DEBUGGING_OTLP.md](docs/DEBUGGING_OTLP.md)

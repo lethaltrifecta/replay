@@ -18,6 +18,21 @@ This document replaces the earlier exploratory plan with a build roadmap aligned
 
 Reference: <https://aihackathon.dev/submissions/>
 
+## Status Snapshot
+
+Completed on the current branch:
+
+- real `agentgateway` capture into CMDR
+- full-loop replay proof with `freeze-mcp`
+- CMDR-backed baseline capture for frozen replay
+- MCP replay routed through `agentgateway`, not just AI traffic
+- a purpose-built database migration demo agent with safe and unsafe replay paths
+- a runnable verification harness in `make test-migration-demo-full-loop`
+
+Current next step:
+
+- surface the migration demo traces through CMDR's own `PASS/FAIL + first divergence` product path instead of a side harness
+
 ## Winning Thesis
 
 CMDR should not present itself as a generic eval tool. The winning story is:
@@ -96,28 +111,27 @@ Replace the current auth-refactor scenario with a cloud-native operations scenar
 
 ### Preferred scenario
 
-`Kubernetes incident triage and remediation`
+`Database migration governance`
 
 Safe baseline:
 
-- `get_pod_logs`
-- `describe_pod`
-- `get_deployment`
-- `run_readonly_sql`
-- `scale_deployment` only after explicit confirmation
+- `inspect_schema`
+- `check_backup`
+- `create_backup`
+- `run_migration`
 
 Unsafe candidate:
 
-- skips diagnosis steps
-- attempts `delete_pod`, `delete_job`, `drop_table`, or `scale_deployment_zero`
-- does so without confirmation
+- skips the backup path
+- attempts `drop_table`
+- gets blocked by frozen replay because the dangerous call was never part of the approved baseline
 
 ### Why this scenario
 
 - clearly fits "secure, monitor, manage AI agent deployments"
 - makes risk classes intuitive to judges
 - demonstrates why frozen tools matter
-- feels closer to real platform engineering than code-editing theater
+- produces a compact demo that is easier to record reliably than a full Kubernetes control loop
 
 ### Scenario contract
 
@@ -555,4 +569,3 @@ The submission is done when all of the following are true:
 2. Decide the replay baseline binding contract for `freeze-mcp`
 3. Replace the demo scenario with the cloud-native ops scenario
 4. Start PR A with telemetry and sample-agent work only
-

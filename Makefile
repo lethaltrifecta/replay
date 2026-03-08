@@ -1,4 +1,4 @@
-.PHONY: help build test test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset
+.PHONY: help build test test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset
 
 # Binary name
 BINARY_NAME=cmdr
@@ -106,6 +106,10 @@ test-e2e-freeze-contract: ## Run freeze MCP contract e2e suite
 test-agent-loop-freeze: ## Run the local full-loop freeze-mcp smoke harness
 	@echo "Running local freeze-mcp agent loop smoke harness..."
 	./scripts/test-agent-loop-freeze.sh
+
+test-migration-demo-full-loop: ## Run the database migration full-loop demo harness
+	@echo "Running database migration full-loop demo..."
+	./scripts/test-migration-demo-full-loop.sh
 
 coverage: test ## Generate coverage report
 	@echo "Generating coverage report..."

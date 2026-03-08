@@ -70,7 +70,11 @@ The script:
 
 ## Recommended Next Step
 
-Replace the seeded `tool_captures` row with a real CMDR-captured baseline, then decide whether MCP traffic should go:
+Use [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md) as the primary verification path.
 
-- direct to `freeze-mcp` first, or
-- through `agentgateway`'s MCP proxy for the final demo path
+This document remains useful as the smaller plumbing proof, but the migration demo is now the main full-loop scenario with:
+
+- a live baseline capture
+- MCP replay through `agentgateway`
+- a safe pass path
+- an unsafe blocked path

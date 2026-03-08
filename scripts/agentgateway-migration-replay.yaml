@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+binds:
+- port: 3202
+  listeners:
+  - name: llm
+    protocol: HTTP
+    routes:
+    - name: llm
+      backends:
+      - ai:
+          name: mock-migration-openai
+          hostOverride: 127.0.0.1:18083
+          pathOverride: /v1/chat/completions
+          provider:
+            openAI:
+              model: migration-safe
+          policies:
+            ai:
+              routes:
+                /v1/chat/completions: completions
+                "*": passthrough
+- port: 3203
+  listeners:
+  - name: mcp
+    routes:
+    - policies:
+        cors:
+          allowOrigins:
+          - "*"
+          allowHeaders:
+          - mcp-protocol-version
+          - content-type
+          - cache-control
+          - x-freeze-trace-id
+          exposeHeaders:
+          - Mcp-Session-Id
+      backends:
+      - mcp:
+          targets:
+          - name: freeze-mcp
+            mcp:
+              host: http://127.0.0.1:9090/mcp/
