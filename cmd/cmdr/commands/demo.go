@@ -37,6 +37,15 @@ var demoMigrationCmd = &cobra.Command{
 	Long:  `Inspect the database migration governance demo traces and verdicts.`,
 }
 
+var demoMigrationRunCmd = &cobra.Command{
+	Use:          "run",
+	Short:        "Run the full migration demo and save artifacts",
+	Long:         `Starts the validated full-loop migration demo harness, streams the live output, and saves a machine-readable summary plus judge-facing report artifacts.`,
+	Args:         cobra.NoArgs,
+	RunE:         runMigrationDemo,
+	SilenceUsage: true,
+}
+
 var demoMigrationVerdictCmd = &cobra.Command{
 	Use:          "verdict",
 	Short:        "Compare migration demo traces and print a verdict",
@@ -50,7 +59,15 @@ func init() {
 	demoCmd.AddCommand(demoSeedCmd)
 	demoCmd.AddCommand(demoGateCmd)
 	demoCmd.AddCommand(demoMigrationCmd)
+	demoMigrationCmd.AddCommand(demoMigrationRunCmd)
 	demoMigrationCmd.AddCommand(demoMigrationVerdictCmd)
+
+	demoMigrationRunCmd.Flags().String("report-dir", "", "Directory to store run logs and report artifacts (default: ./artifacts/migration-demo/<timestamp>)")
+	demoMigrationRunCmd.Flags().String("python-bin", "", "Python interpreter to use for freeze-mcp and demo helper scripts")
+	demoMigrationRunCmd.Flags().String("go-bin", "", "Go binary to use when the harness needs to fall back to go run")
+	demoMigrationRunCmd.Flags().String("agentgateway-dir", "", "Path to the local agentgateway checkout (defaults to ../agentgateway)")
+	demoMigrationRunCmd.Flags().String("freeze-dir", "", "Path to the local freeze-mcp checkout (defaults to ../freeze-mcp)")
+	demoMigrationRunCmd.Flags().Float64("threshold", 0.8, "Similarity threshold used for the saved PASS/FAIL report")
 
 	demoMigrationVerdictCmd.Flags().String("baseline", "", "Baseline trace ID to compare against (required)")
 	demoMigrationVerdictCmd.Flags().String("candidate", "", "Candidate trace ID to evaluate (required)")

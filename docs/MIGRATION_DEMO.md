@@ -45,6 +45,21 @@ The demo agent always sends the full migration tool schema to the model. It does
 
 ## One-Command Verification
 
+Preferred entrypoint:
+
+```bash
+cmdr demo migration run
+```
+
+This command:
+
+- runs the full-loop harness
+- stores all logs under `./artifacts/migration-demo/<timestamp>/`
+- writes `run-summary.json`, `report.json`, and `report.md`
+- prints the safe and unsafe CMDR verdicts live
+
+Fallback developer harness:
+
 Run:
 
 ```bash
@@ -112,6 +127,12 @@ cmdr demo migration verdict \
 
 The full-loop harness now runs this command automatically for both the safe and unsafe traces and saves the output into log files.
 
+The higher-level `cmdr demo migration run` command also saves:
+
+- `run-summary.json`: trace IDs plus log paths
+- `report.json`: structured safe/unsafe comparison data
+- `report.md`: judge-friendly summary for the blog/video workflow
+
 Expected verdicts:
 
 - safe replay: `PASS`
@@ -158,6 +179,6 @@ psql 'postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable' \
 
 ## Remaining Gap
 
-This demo path now has a native CMDR verdict surface via `cmdr demo migration verdict`, but it still sits beside `cmdr gate check`; it is not yet the default gate engine.
+This demo path now has a first-class CLI entrypoint via `cmdr demo migration run` plus a native verdict surface via `cmdr demo migration verdict`, but it still sits beside `cmdr gate check`; it is not yet the default gate engine.
 
-The next integration step is to turn the shell harness into a tighter first-class demo entrypoint and produce saved report artifacts that are ready for the submission video and blog post.
+The next integration step is to tighten the saved report shape for launch assets and decide whether the full-loop path should eventually become part of the broader gate surface.

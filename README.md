@@ -151,6 +151,11 @@ cmdr demo gate --baseline demo-baseline-001 --model claude-3-5-sonnet  # exits 0
 
 Full presenter script and expected outputs: [docs/DEMO.md](docs/DEMO.md)
 
+Run the full database migration demo with saved artifacts:
+
+```bash
+cmdr demo migration run
+```
 ## Command Status
 
 - `cmdr serve`: implemented
@@ -161,6 +166,7 @@ Full presenter script and expected outputs: [docs/DEMO.md](docs/DEMO.md)
 - `cmdr gate check`: implemented (structural + semantic diff)
 - `cmdr gate report`: implemented
 - `cmdr demo {seed,gate}`: implemented (deterministic hackathon demo commands)
+- `cmdr demo migration run`: implemented
 - `cmdr demo migration verdict`: implemented
 - `cmdr experiment *`: scaffold only (prints not implemented)
 - `cmdr eval *`: scaffold only (prints not implemented)
@@ -194,6 +200,7 @@ make fmt
   - Optional endpoint overrides: `E2E_OTLP_HEALTH_URL`, `E2E_OTLP_INGEST_URL`, `E2E_FREEZE_HEALTH_URL`, `E2E_FREEZE_MCP_URL`.
 - Migration demo full-loop harness:
   - Uses Docker PostgreSQL, CMDR, agentgateway, a mock migration MCP server, and freeze-mcp.
+  - Preferred entrypoint: `cmdr demo migration run`
   - Run: `make test-migration-demo-full-loop`
   - Native verdict: `cmdr demo migration verdict --baseline <trace> --candidate <trace>`
   - Full runbook: [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md)

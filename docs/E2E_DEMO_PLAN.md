@@ -29,10 +29,11 @@ Completed on the current branch:
 - a purpose-built database migration demo agent with safe and unsafe replay paths
 - a runnable verification harness in `make test-migration-demo-full-loop`
 - a native CMDR verdict command for the migration demo traces
+- a first-class `cmdr demo migration run` entrypoint with saved report artifacts
 
 Current next step:
 
-- tighten the full-loop path into a first-class demo entrypoint and save report artifacts for the video/blog workflow
+- tighten the saved report shape and launch collateral around the now-runnable first-class demo entrypoint
 
 ## Winning Thesis
 

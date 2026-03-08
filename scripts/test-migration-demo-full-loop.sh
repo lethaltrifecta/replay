@@ -22,6 +22,9 @@ CAPTURE_AGW_LOG="${CAPTURE_AGW_LOG:-/tmp/replay-migration-capture-agw.log}"
 REPLAY_AGW_LOG="${REPLAY_AGW_LOG:-/tmp/replay-migration-replay-agw.log}"
 SAFE_VERDICT_LOG="${SAFE_VERDICT_LOG:-/tmp/replay-migration-safe-verdict.log}"
 UNSAFE_VERDICT_LOG="${UNSAFE_VERDICT_LOG:-/tmp/replay-migration-unsafe-verdict.log}"
+REPORT_SUMMARY_FILE="${REPORT_SUMMARY_FILE:-}"
+RUN_LOG_FILE="${RUN_LOG_FILE:-}"
+CMDR_BIN="${CMDR_BIN:-}"
 
 PYTHON_BIN="${PYTHON_BIN:-}"
 GO_BIN="${GO_BIN:-}"
@@ -70,6 +73,18 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+run_cmdr() {
+  if [ -n "$CMDR_BIN" ]; then
+    "$CMDR_BIN" "$@"
+    return
+  fi
+
+  (
+    cd "$ROOT_DIR"
+    "$GO_BIN" run ./cmd/cmdr "$@"
+  )
+}
 
 wait_for_http() {
   local url="$1"
@@ -170,8 +185,8 @@ fi
 
 if ! curl -sSf "$CMDR_OTLP_URL/health" >/dev/null 2>&1; then
   (
-    cd "$ROOT_DIR"
-    POSTGRES_URL="$CMDR_POSTGRES_URL" "$GO_BIN" run ./cmd/cmdr serve
+    export CMDR_POSTGRES_URL="$CMDR_POSTGRES_URL"
+    run_cmdr serve
   ) >"$CMDR_LOG" 2>&1 &
   CMDR_PID=$!
   disown "$CMDR_PID" >/dev/null 2>&1 || true
@@ -276,8 +291,8 @@ wait_for_count "SELECT COUNT(*) FROM tool_captures WHERE trace_id = '$UNSAFE_REP
 echo
 echo "CMDR verdict: safe replay"
 (
-  cd "$ROOT_DIR"
-  POSTGRES_URL="$CMDR_POSTGRES_URL" "$GO_BIN" run ./cmd/cmdr demo migration verdict \
+  export CMDR_POSTGRES_URL="$CMDR_POSTGRES_URL"
+  run_cmdr demo migration verdict \
     --baseline "$BASELINE_TRACE_ID" \
     --candidate "$SAFE_REPLAY_TRACE_ID" \
     --candidate-label "safe-replay"
@@ -286,12 +301,54 @@ echo "CMDR verdict: safe replay"
 echo
 echo "CMDR verdict: unsafe replay"
 (
-  cd "$ROOT_DIR"
-  POSTGRES_URL="$CMDR_POSTGRES_URL" "$GO_BIN" run ./cmd/cmdr demo migration verdict \
+  export CMDR_POSTGRES_URL="$CMDR_POSTGRES_URL"
+  run_cmdr demo migration verdict \
     --baseline "$BASELINE_TRACE_ID" \
     --candidate "$UNSAFE_REPLAY_TRACE_ID" \
     --candidate-label "unsafe-replay"
 ) | tee "$UNSAFE_VERDICT_LOG"
+
+if [ -n "$REPORT_SUMMARY_FILE" ]; then
+  REPORT_SUMMARY_FILE="$REPORT_SUMMARY_FILE" \
+  BASELINE_TRACE_ID="$BASELINE_TRACE_ID" \
+  SAFE_REPLAY_TRACE_ID="$SAFE_REPLAY_TRACE_ID" \
+  UNSAFE_REPLAY_TRACE_ID="$UNSAFE_REPLAY_TRACE_ID" \
+  CMDR_LOG="$CMDR_LOG" \
+  FREEZE_LOG="$FREEZE_LOG" \
+  MCP_LOG="$MCP_LOG" \
+  LLM_LOG="$LLM_LOG" \
+  CAPTURE_AGW_LOG="$CAPTURE_AGW_LOG" \
+  REPLAY_AGW_LOG="$REPLAY_AGW_LOG" \
+  SAFE_VERDICT_LOG="$SAFE_VERDICT_LOG" \
+  UNSAFE_VERDICT_LOG="$UNSAFE_VERDICT_LOG" \
+  "$PYTHON_BIN" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+payload = {
+    "scenario": "database-migration",
+    "baseline_trace_id": os.environ["BASELINE_TRACE_ID"],
+    "safe_replay_trace_id": os.environ["SAFE_REPLAY_TRACE_ID"],
+    "unsafe_replay_trace_id": os.environ["UNSAFE_REPLAY_TRACE_ID"],
+    "logs": {
+        "run_log": os.environ.get("RUN_LOG_FILE", ""),
+        "cmdr": os.environ["CMDR_LOG"],
+        "freeze_mcp": os.environ["FREEZE_LOG"],
+        "migration_mcp": os.environ["MCP_LOG"],
+        "mock_llm": os.environ["LLM_LOG"],
+        "capture_agentgateway": os.environ["CAPTURE_AGW_LOG"],
+        "replay_agentgateway": os.environ["REPLAY_AGW_LOG"],
+        "safe_verdict": os.environ["SAFE_VERDICT_LOG"],
+        "unsafe_verdict": os.environ["UNSAFE_VERDICT_LOG"],
+    },
+}
+
+summary_path = Path(os.environ["REPORT_SUMMARY_FILE"])
+summary_path.parent.mkdir(parents=True, exist_ok=True)
+summary_path.write_text(json.dumps(payload, indent=2) + "\n")
+PY
+fi
 
 echo
 echo "Baseline trace: $BASELINE_TRACE_ID"
