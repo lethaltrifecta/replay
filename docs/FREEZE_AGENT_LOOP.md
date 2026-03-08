@@ -21,6 +21,7 @@ The loop proven here is:
 - frozen tool results can actually drive the next turn of the loop
 - the baseline trace ID can scope tool lookup through `X-Freeze-Trace-ID`
 - `agentgateway` can stay in the LLM path while `freeze-mcp` serves tool results
+- CMDR can ingest the baseline trace that `freeze-mcp` later reads during replay
 
 ## What This Does Not Prove Yet
 
@@ -33,6 +34,7 @@ Those are the next steps after this proof.
 ## Repo Artifacts
 
 - `scripts/agentgateway-freeze-loop.yaml`
+- `scripts/capture_freeze_baseline.py`
 - `scripts/mock_toolcall_openai_upstream.py`
 - `scripts/run_freeze_agent_loop.py`
 - `scripts/test-agent-loop-freeze.sh`
@@ -42,12 +44,14 @@ Those are the next steps after this proof.
 Prerequisites:
 
 - PostgreSQL available at `CMDR_POSTGRES_URL`
+- `cmdr serve` running at `http://127.0.0.1:4318` for the default baseline capture path
 - `freeze-mcp` running at `http://127.0.0.1:9090`
 - local `agentgateway` clone available at `../agentgateway`
 - Python environment with `freeze_mcp`, `mcp`, `httpx`, `anyio`, and `psycopg`
 
 If the target database is empty, the script applies CMDR's checked-in SQL migrations before seeding the tool capture.
 The default PostgreSQL URL matches this repo's Docker Compose stack: `postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable`.
+The default baseline source is `cmdr`; set `BASELINE_SOURCE=seed` if you want the older direct-SQL fallback.
 
 Run:
 
@@ -57,7 +61,7 @@ Run:
 
 The script:
 
-1. seeds a single `tool_captures` row
+1. captures a baseline trace through CMDR OTLP ingestion, or seeds a fallback row when `BASELINE_SOURCE=seed`
 2. starts a mock OpenAI-compatible tool-calling upstream
 3. starts local `agentgateway`
 4. runs a minimal agent loop against `freeze-mcp`

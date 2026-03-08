@@ -8,15 +8,18 @@ FREEZE_DIR="${FREEZE_DIR:-$ROOT_DIR/../freeze-mcp}"
 AGW_CONFIG="${AGW_CONFIG:-$ROOT_DIR/scripts/agentgateway-freeze-loop.yaml}"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-$ROOT_DIR/pkg/storage/migrations}"
 CMDR_POSTGRES_URL="${CMDR_POSTGRES_URL:-postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable}"
+CMDR_OTLP_URL="${CMDR_OTLP_URL:-http://127.0.0.1:4318}"
 FREEZE_URL="${FREEZE_URL:-http://127.0.0.1:9090}"
 AGW_PORT="${AGW_PORT:-3002}"
 MOCK_PORT="${MOCK_PORT:-18081}"
-TRACE_ID="${FREEZE_TRACE_ID:-agent-loop-$(date +%s)}"
+TRACE_ID="${FREEZE_TRACE_ID:-}"
+BASELINE_SOURCE="${BASELINE_SOURCE:-cmdr}"
 TOOL_NAME="${TOOL_NAME:-calculator}"
 TOOL_ARGS_JSON="${TOOL_ARGS_JSON:-{\"operation\":\"add\",\"a\":5,\"b\":3}}"
 EXPECTED_RESULT_JSON="${EXPECTED_RESULT_JSON:-{\"result\":8}}"
 PROMPT_TEXT="${PROMPT_TEXT:-Use the calculator to add 5 and 3.}"
 EXPECT_SUBSTRING="${EXPECT_SUBSTRING:-8}"
+BASELINE_COMPLETION_TEXT="${BASELINE_COMPLETION_TEXT:-I will use the calculator.}"
 MOCK_LOG="${MOCK_LOG:-/tmp/replay-mock-toolloop.log}"
 AGW_LOG="${AGW_LOG:-/tmp/replay-agentgateway-toolloop.log}"
 
@@ -27,6 +30,10 @@ if [ -z "$PYTHON_BIN" ]; then
   else
     PYTHON_BIN="python3"
   fi
+fi
+
+if [ -z "$TRACE_ID" ]; then
+  TRACE_ID="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(16))')"
 fi
 
 MOCK_PID=""
@@ -44,6 +51,24 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+wait_for_count() {
+  local query="$1"
+  local expected="$2"
+  local label="$3"
+
+  for _ in $(seq 1 30); do
+    local count
+    count="$(psql "$CMDR_POSTGRES_URL" -XtAc "$query" | tr -d '[:space:]')"
+    if [ "$count" = "$expected" ]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "timed out waiting for $label"
+  return 1
+}
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "cargo not found in PATH"
@@ -89,8 +114,27 @@ then
   exit 1
 fi
 
-export TRACE_ID TOOL_NAME TOOL_ARGS_JSON EXPECTED_RESULT_JSON CMDR_POSTGRES_URL
-PYTHONPATH="$FREEZE_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" - <<'PY'
+if [ "$BASELINE_SOURCE" = "cmdr" ]; then
+  if ! curl -sSf "$CMDR_OTLP_URL/health" >/dev/null 2>&1; then
+    echo "CMDR OTLP receiver is not listening on $CMDR_OTLP_URL"
+    echo "Start cmdr serve first, or use BASELINE_SOURCE=seed for the direct fallback"
+    exit 1
+  fi
+
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/capture_freeze_baseline.py" \
+    --otlp-url "$CMDR_OTLP_URL" \
+    --trace-id "$TRACE_ID" \
+    --prompt "$PROMPT_TEXT" \
+    --completion "$BASELINE_COMPLETION_TEXT" \
+    --tool-name "$TOOL_NAME" \
+    --tool-args "$TOOL_ARGS_JSON" \
+    --tool-result "$EXPECTED_RESULT_JSON"
+
+  wait_for_count "SELECT COUNT(*) FROM replay_traces WHERE trace_id = '$TRACE_ID'" "1" "replay_traces row for $TRACE_ID"
+  wait_for_count "SELECT COUNT(*) FROM tool_captures WHERE trace_id = '$TRACE_ID'" "1" "tool_captures row for $TRACE_ID"
+else
+  export TRACE_ID TOOL_NAME TOOL_ARGS_JSON EXPECTED_RESULT_JSON CMDR_POSTGRES_URL
+  PYTHONPATH="$FREEZE_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" - <<'PY'
 import json
 import os
 from datetime import datetime, timezone
@@ -130,6 +174,7 @@ with psycopg.connect(os.environ["CMDR_POSTGRES_URL"]) as conn:
 
 print(f"seeded tool capture trace_id={trace_id} args_hash={args_hash}")
 PY
+fi
 
 PYTHONPATH="$FREEZE_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" \
   "$ROOT_DIR/scripts/mock_toolcall_openai_upstream.py" \
