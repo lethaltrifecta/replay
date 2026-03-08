@@ -30,10 +30,11 @@ Completed on the current branch:
 - a runnable verification harness in `make test-migration-demo-full-loop`
 - a native CMDR verdict command for the migration demo traces
 - a first-class `cmdr demo migration run` entrypoint with saved report artifacts
+- launch-oriented artifacts (`judge-highlight.md`, `demo-script.md`) emitted on each full run
 
 Current next step:
 
-- tighten the saved report shape and launch collateral around the now-runnable first-class demo entrypoint
+- tighten the final launch collateral and decide how much of this demo path should graduate into the broader gate surface
 
 ## Winning Thesis
 

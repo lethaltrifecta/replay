@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lethaltrifecta/replay/pkg/diff"
+	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
 func TestFindRepoRoot(t *testing.T) {
@@ -51,8 +52,10 @@ func TestLoadMigrationDemoRunSummary(t *testing.T) {
 
 func TestRenderMigrationDemoReportMarkdown(t *testing.T) {
 	report := renderMigrationDemoReportMarkdown(&migrationDemoReportArtifact{
-		GeneratedAt: time.Date(2026, time.March, 8, 12, 34, 56, 0, time.UTC),
-		ReportDir:   "/tmp/migration-demo",
+		GeneratedAt:    time.Date(2026, time.March, 8, 12, 34, 56, 0, time.UTC),
+		ReportDir:      "/tmp/migration-demo",
+		Scenario:       "database-migration",
+		JudgeHighlight: "CMDR blocked an unsafe replay after it diverged from the approved baseline.",
 		Summary: &migrationDemoRunSummary{
 			BaselineTraceID:     "baseline-trace",
 			SafeReplayTraceID:   "safe-trace",
@@ -104,6 +107,10 @@ func TestRenderMigrationDemoReportMarkdown(t *testing.T) {
 	})
 
 	assert.Contains(t, report, "# Migration Demo Report")
+	assert.Contains(t, report, "## Judge Highlight")
+	assert.Contains(t, report, "CMDR blocked an unsafe replay")
+	assert.Contains(t, report, "## Outcome Summary")
+	assert.Contains(t, report, "## Demo Flow")
 	assert.Contains(t, report, "`baseline-trace`")
 	assert.Contains(t, report, "### safe-replay")
 	assert.Contains(t, report, "### unsafe-replay")
@@ -111,6 +118,71 @@ func TestRenderMigrationDemoReportMarkdown(t *testing.T) {
 	assert.Contains(t, report, "`FAIL`")
 	assert.Contains(t, report, `baseline="inspect_schema" variant="drop_table"`)
 	assert.Contains(t, report, "/tmp/migration-demo/run.log")
+}
+
+func TestRenderMigrationJudgeHighlightMarkdown(t *testing.T) {
+	report := renderMigrationJudgeHighlightMarkdown(&migrationDemoReportArtifact{
+		JudgeHighlight: "CMDR replayed a frozen migration and blocked the unsafe candidate.",
+		Summary: &migrationDemoRunSummary{
+			BaselineTraceID: "baseline-trace",
+		},
+		Safe: &migrationDemoVerdictInfo{
+			Comparison: &traceComparisonReport{
+				Report: &diff.Report{Verdict: "pass"},
+			},
+		},
+		Unsafe: &migrationDemoVerdictInfo{
+			FirstDivergence: `tool #0 changed: baseline="inspect_schema" variant="drop_table"`,
+			Comparison: &traceComparisonReport{
+				Report: &diff.Report{Verdict: "fail"},
+			},
+		},
+	})
+
+	assert.Contains(t, report, "# Judge Highlight")
+	assert.Contains(t, report, "CMDR replayed a frozen migration")
+	assert.Contains(t, report, "`PASS`")
+	assert.Contains(t, report, "`FAIL`")
+	assert.Contains(t, report, `baseline="inspect_schema" variant="drop_table"`)
+}
+
+func TestRenderMigrationDemoScriptMarkdown(t *testing.T) {
+	script := renderMigrationDemoScriptMarkdown(&migrationDemoReportArtifact{
+		ReportDir: "/tmp/migration-demo",
+		Summary: &migrationDemoRunSummary{
+			Logs: migrationDemoLogPaths{
+				RunLog:        "/tmp/migration-demo/run.log",
+				SafeVerdict:   "/tmp/migration-demo/safe-verdict.log",
+				UnsafeVerdict: "/tmp/migration-demo/unsafe-verdict.log",
+			},
+		},
+	})
+
+	assert.Contains(t, script, "# Migration Demo Script")
+	assert.Contains(t, script, "## Setup")
+	assert.Contains(t, script, "`cmdr demo migration run --report-dir /tmp/migration-demo`")
+	assert.Contains(t, script, "## Talking Points")
+	assert.Contains(t, script, "`freeze-mcp` keeps the tool environment fixed")
+	assert.Contains(t, script, "/tmp/migration-demo/safe-verdict.log")
+}
+
+func TestMigrationJudgeHighlight(t *testing.T) {
+	highlight := migrationJudgeHighlight(&migrationDemoRunSummary{
+		BaselineTraceID: "baseline-trace",
+	}, &traceComparisonReport{
+		Report: &diff.Report{
+			FirstDivergence: storage.JSONB{
+				"type":       "tool_sequence",
+				"tool_index": 0,
+				"baseline":   "inspect_schema",
+				"variant":    "drop_table",
+			},
+		},
+	})
+
+	assert.Contains(t, highlight, "agentgateway")
+	assert.Contains(t, highlight, "inspect_schema")
+	assert.Contains(t, highlight, "baseline-trace")
 }
 
 func TestResolveMigrationDemoPostgresURL_Default(t *testing.T) {

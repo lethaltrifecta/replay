@@ -156,6 +156,9 @@ Run the full database migration demo with saved artifacts:
 ```bash
 cmdr demo migration run
 ```
+
+This writes a self-contained artifact bundle with logs, structured results, a markdown report, a judge highlight, and a demo script.
+
 ## Command Status
 
 - `cmdr serve`: implemented

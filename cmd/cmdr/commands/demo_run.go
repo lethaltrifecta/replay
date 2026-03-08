@@ -37,11 +37,13 @@ type migrationDemoLogPaths struct {
 }
 
 type migrationDemoReportArtifact struct {
-	GeneratedAt time.Time                 `json:"generated_at"`
-	ReportDir   string                    `json:"report_dir"`
-	Summary     *migrationDemoRunSummary  `json:"summary"`
-	Safe        *migrationDemoVerdictInfo `json:"safe"`
-	Unsafe      *migrationDemoVerdictInfo `json:"unsafe"`
+	GeneratedAt    time.Time                 `json:"generated_at"`
+	ReportDir      string                    `json:"report_dir"`
+	Scenario       string                    `json:"scenario"`
+	JudgeHighlight string                    `json:"judge_highlight"`
+	Summary        *migrationDemoRunSummary  `json:"summary"`
+	Safe           *migrationDemoVerdictInfo `json:"safe"`
+	Unsafe         *migrationDemoVerdictInfo `json:"unsafe"`
 }
 
 type migrationDemoVerdictInfo struct {
@@ -130,9 +132,11 @@ func runMigrationDemo(cmd *cobra.Command, args []string) error {
 	}
 
 	artifact := &migrationDemoReportArtifact{
-		GeneratedAt: time.Now().UTC(),
-		ReportDir:   reportDir,
-		Summary:     summary,
+		GeneratedAt:    time.Now().UTC(),
+		ReportDir:      reportDir,
+		Scenario:       "database-migration",
+		JudgeHighlight: migrationJudgeHighlight(summary, unsafeComparison),
+		Summary:        summary,
 		Safe: &migrationDemoVerdictInfo{
 			Label:           "safe-replay",
 			TraceID:         summary.SafeReplayTraceID,
@@ -157,10 +161,22 @@ func runMigrationDemo(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("write markdown report: %w", err)
 	}
 
+	judgeHighlightPath := filepath.Join(reportDir, "judge-highlight.md")
+	if err := os.WriteFile(judgeHighlightPath, []byte(renderMigrationJudgeHighlightMarkdown(artifact)), 0o644); err != nil {
+		return fmt.Errorf("write judge highlight: %w", err)
+	}
+
+	demoScriptPath := filepath.Join(reportDir, "demo-script.md")
+	if err := os.WriteFile(demoScriptPath, []byte(renderMigrationDemoScriptMarkdown(artifact)), 0o644); err != nil {
+		return fmt.Errorf("write demo script: %w", err)
+	}
+
 	cmd.Printf("\nSaved artifacts:\n")
 	cmd.Printf("  Summary: %s\n", summaryPath)
 	cmd.Printf("  JSON:    %s\n", jsonArtifactPath)
 	cmd.Printf("  Markdown: %s\n", markdownArtifactPath)
+	cmd.Printf("  Highlight: %s\n", judgeHighlightPath)
+	cmd.Printf("  Script:  %s\n", demoScriptPath)
 	cmd.Printf("\nVerdicts:\n")
 	cmd.Printf("  Safe replay:   %s (%.4f)\n", verdictDisplay(safeComparison.Report.Verdict), safeComparison.Report.SimilarityScore)
 	cmd.Printf("  Unsafe replay: %s (%.4f)\n", verdictDisplay(unsafeComparison.Report.Verdict), unsafeComparison.Report.SimilarityScore)
@@ -286,11 +302,25 @@ func renderMigrationDemoReportMarkdown(artifact *migrationDemoReportArtifact) st
 
 	builder.WriteString("# Migration Demo Report\n\n")
 	builder.WriteString(fmt.Sprintf("Generated: `%s`\n\n", artifact.GeneratedAt.Format(time.RFC3339)))
+	builder.WriteString("## Judge Highlight\n\n")
+	builder.WriteString(artifact.JudgeHighlight)
+	builder.WriteString("\n\n")
+	builder.WriteString("## Outcome Summary\n\n")
+	builder.WriteString("- Safe replay: `PASS`\n")
+	builder.WriteString(fmt.Sprintf("- Unsafe replay: `FAIL`\n"))
+	if artifact.Unsafe.FirstDivergence != "" {
+		builder.WriteString(fmt.Sprintf("- First divergence: `%s`\n", artifact.Unsafe.FirstDivergence))
+	}
+	builder.WriteString("- What this proves: the frozen MCP replay path blocked a dangerous tool that was never part of the approved baseline.\n\n")
 	builder.WriteString("## Trace IDs\n\n")
 	builder.WriteString(fmt.Sprintf("- Baseline: `%s`\n", artifact.Summary.BaselineTraceID))
 	builder.WriteString(fmt.Sprintf("- Safe replay: `%s`\n", artifact.Summary.SafeReplayTraceID))
 	builder.WriteString(fmt.Sprintf("- Unsafe replay: `%s`\n\n", artifact.Summary.UnsafeReplayTraceID))
 
+	builder.WriteString("## Demo Flow\n\n")
+	builder.WriteString("1. Capture a known-good baseline through `agentgateway` with live migration tools.\n")
+	builder.WriteString("2. Replay the same task through `agentgateway -> freeze-mcp` with a safe candidate and show the matching `PASS` verdict.\n")
+	builder.WriteString("3. Replay the same frozen baseline with an unsafe candidate and show the `FAIL` verdict plus first divergence at `drop_table`.\n\n")
 	builder.WriteString("## Verdicts\n\n")
 	writeMigrationVerdictMarkdown(&builder, artifact.Safe)
 	writeMigrationVerdictMarkdown(&builder, artifact.Unsafe)
@@ -307,6 +337,65 @@ func renderMigrationDemoReportMarkdown(artifact *migrationDemoReportArtifact) st
 	builder.WriteString(fmt.Sprintf("- unsafe verdict: `%s`\n", artifact.Summary.Logs.UnsafeVerdict))
 
 	return builder.String()
+}
+
+func renderMigrationJudgeHighlightMarkdown(artifact *migrationDemoReportArtifact) string {
+	var builder strings.Builder
+
+	builder.WriteString("# Judge Highlight\n\n")
+	builder.WriteString(artifact.JudgeHighlight)
+	builder.WriteString("\n\n")
+	builder.WriteString("## Evidence\n\n")
+	builder.WriteString(fmt.Sprintf("- Baseline trace: `%s`\n", artifact.Summary.BaselineTraceID))
+	builder.WriteString(fmt.Sprintf("- Safe replay verdict: `%s`\n", verdictDisplay(artifact.Safe.Comparison.Report.Verdict)))
+	builder.WriteString(fmt.Sprintf("- Unsafe replay verdict: `%s`\n", verdictDisplay(artifact.Unsafe.Comparison.Report.Verdict)))
+	if artifact.Unsafe.FirstDivergence != "" {
+		builder.WriteString(fmt.Sprintf("- First divergence: `%s`\n", artifact.Unsafe.FirstDivergence))
+	}
+	builder.WriteString("\n## Copy-Ready Blurb\n\n")
+	builder.WriteString(artifact.JudgeHighlight)
+	builder.WriteString("\n")
+
+	return builder.String()
+}
+
+func renderMigrationDemoScriptMarkdown(artifact *migrationDemoReportArtifact) string {
+	var builder strings.Builder
+
+	builder.WriteString("# Migration Demo Script\n\n")
+	builder.WriteString("## Setup\n\n")
+	builder.WriteString(fmt.Sprintf("Run: `cmdr demo migration run --report-dir %s`\n\n", artifact.ReportDir))
+	builder.WriteString("## What To Show\n\n")
+	builder.WriteString("1. Show the report directory and point out `report.md`, `judge-highlight.md`, and `demo-script.md`.\n")
+	builder.WriteString(fmt.Sprintf("2. Show the safe replay verdict in `%s` and call out `PASS`.\n", artifact.Summary.Logs.SafeVerdict))
+	builder.WriteString(fmt.Sprintf("3. Show the unsafe replay verdict in `%s` and call out `FAIL`.\n", artifact.Summary.Logs.UnsafeVerdict))
+	builder.WriteString("4. Highlight the first divergence where the unsafe replay changed from `inspect_schema` to `drop_table`.\n")
+	builder.WriteString("5. Explain that the unsafe tool was blocked because `freeze-mcp` had no approved baseline capture for it.\n\n")
+	builder.WriteString("## Talking Points\n\n")
+	builder.WriteString("- `agentgateway` is in the main path for both live capture and replay.\n")
+	builder.WriteString("- CMDR stores the baseline and candidate traces, then compares their tool behavior and risk profile.\n")
+	builder.WriteString("- `freeze-mcp` keeps the tool environment fixed, so the demo isolates model behavior instead of infrastructure drift.\n")
+	builder.WriteString("- The safe replay shows that acceptable candidates can still pass in the frozen environment.\n\n")
+	builder.WriteString("## Screenshot Checklist\n\n")
+	builder.WriteString(fmt.Sprintf("- `report.md`: `%s`\n", filepath.Join(artifact.ReportDir, "report.md")))
+	builder.WriteString(fmt.Sprintf("- safe verdict log: `%s`\n", artifact.Summary.Logs.SafeVerdict))
+	builder.WriteString(fmt.Sprintf("- unsafe verdict log: `%s`\n", artifact.Summary.Logs.UnsafeVerdict))
+	builder.WriteString(fmt.Sprintf("- full run log: `%s`\n", artifact.Summary.Logs.RunLog))
+
+	return builder.String()
+}
+
+func migrationJudgeHighlight(summary *migrationDemoRunSummary, unsafeComparison *traceComparisonReport) string {
+	highlight := "CMDR captured an approved database migration through agentgateway, replayed the same task against a frozen MCP environment, and blocked an unsafe candidate when it diverged from the approved baseline."
+	if unsafeComparison != nil {
+		if divergence := formatFirstDivergence(unsafeComparison.Report.FirstDivergence); divergence != "" {
+			highlight = fmt.Sprintf("%s In the failing replay, the first divergence was %s.", highlight, divergence)
+		}
+	}
+	if summary != nil && summary.BaselineTraceID != "" {
+		highlight = fmt.Sprintf("%s Baseline trace: `%s`.", highlight, summary.BaselineTraceID)
+	}
+	return highlight
 }
 
 func writeMigrationVerdictMarkdown(builder *strings.Builder, verdict *migrationDemoVerdictInfo) {

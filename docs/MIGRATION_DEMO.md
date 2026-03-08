@@ -55,7 +55,7 @@ This command:
 
 - runs the full-loop harness
 - stores all logs under `./artifacts/migration-demo/<timestamp>/`
-- writes `run-summary.json`, `report.json`, and `report.md`
+- writes `run-summary.json`, `report.json`, `report.md`, `judge-highlight.md`, and `demo-script.md`
 - prints the safe and unsafe CMDR verdicts live
 
 Fallback developer harness:
@@ -132,6 +132,8 @@ The higher-level `cmdr demo migration run` command also saves:
 - `run-summary.json`: trace IDs plus log paths
 - `report.json`: structured safe/unsafe comparison data
 - `report.md`: judge-friendly summary for the blog/video workflow
+- `judge-highlight.md`: copy-ready project summary for the submission form or blog post
+- `demo-script.md`: a concise checklist for recording the video or handing the demo to someone else
 
 Expected verdicts:
 
