@@ -11,9 +11,11 @@ CMDR_POSTGRES_URL="${CMDR_POSTGRES_URL:-postgres://cmdr:cmdr_dev_password@localh
 CMDR_OTLP_URL="${CMDR_OTLP_URL:-http://127.0.0.1:4318}"
 FREEZE_URL="${FREEZE_URL:-http://127.0.0.1:9090}"
 AGW_PORT="${AGW_PORT:-3002}"
+MCP_PROXY_PORT="${MCP_PROXY_PORT:-3003}"
 MOCK_PORT="${MOCK_PORT:-18081}"
 TRACE_ID="${FREEZE_TRACE_ID:-}"
 BASELINE_SOURCE="${BASELINE_SOURCE:-cmdr}"
+MCP_TRANSPORT_MODE="${MCP_TRANSPORT_MODE:-agentgateway}"
 TOOL_NAME="${TOOL_NAME:-calculator}"
 TOOL_ARGS_JSON="${TOOL_ARGS_JSON:-{\"operation\":\"add\",\"a\":5,\"b\":3}}"
 EXPECTED_RESULT_JSON="${EXPECTED_RESULT_JSON:-{\"result\":8}}"
@@ -216,10 +218,27 @@ if ! lsof -nP -iTCP:"$AGW_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   exit 1
 fi
 
+MCP_URL="$FREEZE_URL/mcp/"
+if [ "$MCP_TRANSPORT_MODE" = "agentgateway" ]; then
+  for _ in $(seq 1 120); do
+    if lsof -nP -iTCP:"$MCP_PROXY_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+
+  if ! lsof -nP -iTCP:"$MCP_PROXY_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "agentgateway MCP proxy failed to start on port $MCP_PROXY_PORT; see $AGW_LOG"
+    exit 1
+  fi
+
+  MCP_URL="http://127.0.0.1:$MCP_PROXY_PORT/mcp/"
+fi
+
 PYTHONPATH="$FREEZE_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" \
   "$ROOT_DIR/scripts/run_freeze_agent_loop.py" \
   --llm-url "http://127.0.0.1:$AGW_PORT" \
-  --mcp-url "$FREEZE_URL/mcp/" \
+  --mcp-url "$MCP_URL" \
   --freeze-trace-id "$TRACE_ID" \
   --prompt "$PROMPT_TEXT" \
   --expect-substring "$EXPECT_SUBSTRING"

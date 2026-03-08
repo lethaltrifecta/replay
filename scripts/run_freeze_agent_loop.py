@@ -40,7 +40,11 @@ async def run_loop(args):
 
     async with httpx.AsyncClient(timeout=15.0) as llm_client:
         async with httpx.AsyncClient(headers={"X-Freeze-Trace-ID": args.freeze_trace_id}, timeout=15.0) as mcp_http_client:
-            async with streamable_http_client(mcp_url, http_client=mcp_http_client) as (
+            async with streamable_http_client(
+                mcp_url,
+                http_client=mcp_http_client,
+                terminate_on_close=False,
+            ) as (
                 read_stream,
                 write_stream,
                 _,

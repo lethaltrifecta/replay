@@ -22,11 +22,11 @@ The loop proven here is:
 - the baseline trace ID can scope tool lookup through `X-Freeze-Trace-ID`
 - `agentgateway` can stay in the LLM path while `freeze-mcp` serves tool results
 - CMDR can ingest the baseline trace that `freeze-mcp` later reads during replay
+- the same loop works with MCP traffic proxied through `agentgateway`, not just AI traffic
 
 ## What This Does Not Prove Yet
 
-- CMDR-generated captures feeding the loop directly
-- MCP traffic proxied through `agentgateway`
+- baseline captures coming from a live agent run instead of the minimal OTLP injector
 - integration with `cmdr gate check`
 
 Those are the next steps after this proof.
@@ -52,6 +52,7 @@ Prerequisites:
 If the target database is empty, the script applies CMDR's checked-in SQL migrations before seeding the tool capture.
 The default PostgreSQL URL matches this repo's Docker Compose stack: `postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable`.
 The default baseline source is `cmdr`; set `BASELINE_SOURCE=seed` if you want the older direct-SQL fallback.
+The default MCP transport is `agentgateway`; set `MCP_TRANSPORT_MODE=direct` if you want the older direct-to-`freeze-mcp` fallback.
 
 Run:
 
