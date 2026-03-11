@@ -1,4 +1,4 @@
-.PHONY: help build test test-integration test-e2e lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset
+.PHONY: help build test test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset
 
 # Binary name
 BINARY_NAME=cmdr
@@ -24,7 +24,7 @@ help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Available targets:'
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # ============================================================================
 # Development
@@ -92,7 +92,24 @@ test-integration: ## Run integration tests
 
 test-e2e: ## Run end-to-end tests
 	@echo "Running e2e tests..."
-	$(GOTEST) -v -tags=e2e ./test/e2e/...
+	$(MAKE) test-e2e-freeze-contract
+	$(MAKE) test-e2e-replay-freeze
+
+test-e2e-replay-freeze: ## Run replay->freeze ingest/replay e2e flow
+	@echo "Running replay+freeze integration e2e..."
+	E2E_REPLAY_FREEZE=1 $(GOTEST) -v -tags=e2e ./test/e2e/... -run TestReplayFreezeIngestAndReplayIntegration -count=1
+
+test-e2e-freeze-contract: ## Run freeze MCP contract e2e suite
+	@echo "Running freeze MCP contract e2e..."
+	E2E_FREEZE_CONTRACT=1 $(GOTEST) -v -tags=e2e ./test/e2e/... -run TestFreezeMCPContract -count=1
+
+test-agent-loop-freeze: ## Run the local full-loop freeze-mcp smoke harness
+	@echo "Running local freeze-mcp agent loop smoke harness..."
+	./scripts/test-agent-loop-freeze.sh
+
+test-migration-demo-full-loop: ## Run the database migration full-loop demo harness
+	@echo "Running database migration full-loop demo..."
+	./scripts/test-migration-demo-full-loop.sh
 
 coverage: test ## Generate coverage report
 	@echo "Generating coverage report..."

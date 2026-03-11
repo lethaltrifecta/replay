@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+binds:
+- port: 3102
+  listeners:
+  - name: llm
+    protocol: HTTP
+    routes:
+    - name: llm
+      backends:
+      - ai:
+          name: mock-migration-openai
+          hostOverride: 127.0.0.1:18083
+          pathOverride: /v1/chat/completions
+          provider:
+            openAI:
+              model: migration-safe
+          policies:
+            ai:
+              routes:
+                /v1/chat/completions: completions
+                "*": passthrough
+- port: 3103
+  listeners:
+  - name: mcp
+    routes:
+    - policies:
+        cors:
+          allowOrigins:
+          - "*"
+          allowHeaders:
+          - mcp-protocol-version
+          - content-type
+          - cache-control
+          exposeHeaders:
+          - Mcp-Session-Id
+      backends:
+      - mcp:
+          targets:
+          - name: migration-tools
+            mcp:
+              host: http://127.0.0.1:18082/mcp/

@@ -2,6 +2,7 @@ package replay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -19,11 +20,12 @@ type Completer interface {
 
 // VariantConfig describes the model configuration for the variant run.
 type VariantConfig struct {
-	Model       string   `json:"model"`
-	Provider    string   `json:"provider,omitempty"`
-	Temperature *float64 `json:"temperature,omitempty"`
-	TopP        *float64 `json:"top_p,omitempty"`
-	MaxTokens   *int     `json:"max_tokens,omitempty"`
+	Model          string            `json:"model"`
+	Provider       string            `json:"provider,omitempty"`
+	Temperature    *float64          `json:"temperature,omitempty"`
+	TopP           *float64          `json:"top_p,omitempty"`
+	MaxTokens      *int              `json:"max_tokens,omitempty"`
+	RequestHeaders map[string]string `json:"request_headers,omitempty"`
 }
 
 // PreparedRun holds the state created by Setup, ready for Execute.
@@ -126,6 +128,9 @@ func (e *Engine) Setup(ctx context.Context, baselineTraceID string, variant Vari
 		"model":    variant.Model,
 		"provider": variant.Provider,
 	}
+	if len(variant.RequestHeaders) > 0 {
+		variantConfig["request_headers"] = variant.RequestHeaders
+	}
 	variantRun := &storage.ExperimentRun{
 		ID:            variantRunID,
 		ExperimentID:  experimentID,
@@ -222,13 +227,24 @@ func (e *Engine) replayStep(ctx context.Context, baseline *storage.ReplayTrace, 
 	if err != nil {
 		return nil, fmt.Errorf("extract messages: %w", err)
 	}
+	tools, err := extractTools(baseline.Prompt)
+	if err != nil {
+		return nil, fmt.Errorf("extract tools: %w", err)
+	}
+	toolChoice, err := extractToolChoice(baseline.Prompt)
+	if err != nil {
+		return nil, fmt.Errorf("extract tool choice: %w", err)
+	}
 
 	req := &agwclient.CompletionRequest{
 		Model:       variant.Model,
 		Messages:    messages,
+		Tools:       tools,
+		ToolChoice:  toolChoice,
 		Temperature: variant.Temperature,
 		TopP:        variant.TopP,
 		MaxTokens:   variant.MaxTokens,
+		Headers:     variant.RequestHeaders,
 	}
 
 	start := time.Now()
@@ -239,7 +255,17 @@ func (e *Engine) replayStep(ctx context.Context, baseline *storage.ReplayTrace, 
 	}
 
 	completion := ""
-	metadata := storage.JSONB{"source": "replay", "baseline_trace_id": baseline.TraceID}
+	metadata := storage.JSONB{
+		"source":              "replay",
+		"baseline_trace_id":   baseline.TraceID,
+		"baseline_step_index": baseline.StepIndex,
+	}
+	if len(tools) > 0 {
+		metadata["replay_tool_names"] = toolNamesFromDefinitions(tools)
+	}
+	if toolChoice != nil {
+		metadata["replay_tool_choice"] = toolChoice
+	}
 	if len(resp.Choices) > 0 {
 		completion = resp.Choices[0].Message.Content
 		if len(resp.Choices[0].Message.ToolCalls) > 0 {
@@ -267,35 +293,33 @@ func (e *Engine) replayStep(ctx context.Context, baseline *storage.ReplayTrace, 
 }
 
 // extractMessages parses the prompt JSONB into ChatMessage slice.
-// Expected format: {"messages": [{"role": "...", "content": "..."}]}
 func extractMessages(prompt storage.JSONB) ([]agwclient.ChatMessage, error) {
 	raw, ok := prompt["messages"]
 	if !ok {
 		return nil, fmt.Errorf("prompt missing 'messages' key")
 	}
 
-	slice, ok := raw.([]interface{})
-	if !ok {
-		// Try typed slice (from test mocks or direct construction)
-		if typedSlice, ok := raw.([]map[string]string); ok {
-			msgs := make([]agwclient.ChatMessage, len(typedSlice))
-			for i, m := range typedSlice {
-				msgs[i] = agwclient.ChatMessage{Role: m["role"], Content: m["content"]}
-			}
-			return msgs, nil
-		}
-		return nil, fmt.Errorf("'messages' is not a slice (type %T)", raw)
+	slice, err := decodeJSONValue[[]map[string]interface{}](raw)
+	if err != nil {
+		return nil, fmt.Errorf("'messages' is not a valid slice: %w", err)
 	}
 
 	msgs := make([]agwclient.ChatMessage, 0, len(slice))
 	for _, item := range slice {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
+		msg := agwclient.ChatMessage{
+			Role:       stringValue(item["role"]),
+			Content:    contentToString(item["content"]),
+			Name:       stringValue(item["name"]),
+			ToolCallID: stringValue(item["tool_call_id"]),
 		}
-		role, _ := m["role"].(string)
-		content, _ := m["content"].(string)
-		msgs = append(msgs, agwclient.ChatMessage{Role: role, Content: content})
+		if rawToolCalls, ok := item["tool_calls"]; ok {
+			toolCalls, err := decodeJSONValue[[]agwclient.ToolCallResponse](rawToolCalls)
+			if err != nil {
+				return nil, fmt.Errorf("decode message tool_calls: %w", err)
+			}
+			msg.ToolCalls = toolCalls
+		}
+		msgs = append(msgs, msg)
 	}
 
 	if len(msgs) == 0 {
@@ -303,6 +327,83 @@ func extractMessages(prompt storage.JSONB) ([]agwclient.ChatMessage, error) {
 	}
 
 	return msgs, nil
+}
+
+func extractTools(prompt storage.JSONB) ([]agwclient.ToolDefinition, error) {
+	raw, ok := prompt["tools"]
+	if !ok {
+		return nil, nil
+	}
+
+	tools, err := decodeJSONValue[[]agwclient.ToolDefinition](raw)
+	if err != nil {
+		return nil, fmt.Errorf("prompt tools: %w", err)
+	}
+	if len(tools) == 0 {
+		return nil, nil
+	}
+	return tools, nil
+}
+
+func extractToolChoice(prompt storage.JSONB) (interface{}, error) {
+	raw, ok := prompt["tool_choice"]
+	if !ok {
+		return nil, nil
+	}
+
+	choice, err := normalizeJSONValue(raw)
+	if err != nil {
+		return nil, fmt.Errorf("prompt tool_choice: %w", err)
+	}
+	return choice, nil
+}
+
+func decodeJSONValue[T any](raw interface{}) (T, error) {
+	var out T
+	body, err := json.Marshal(raw)
+	if err != nil {
+		return out, err
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func normalizeJSONValue(raw interface{}) (interface{}, error) {
+	return decodeJSONValue[interface{}](raw)
+}
+
+func stringValue(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func contentToString(v interface{}) string {
+	switch val := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return val
+	default:
+		body, err := json.Marshal(val)
+		if err != nil {
+			return fmt.Sprintf("%v", val)
+		}
+		return string(body)
+	}
+}
+
+func toolNamesFromDefinitions(tools []agwclient.ToolDefinition) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Function != nil && tool.Function.Name != "" {
+			names = append(names, tool.Function.Name)
+		}
+	}
+	return names
 }
 
 // failExperiment marks the variant run and experiment as failed.

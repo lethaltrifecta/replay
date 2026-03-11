@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -89,9 +90,10 @@ func (p *Parser) ParseLLMSpan(span ptrace.Span, resource pcommon.Resource) *stor
 	spanID := span.SpanID().String()
 	runID := traceID // Use trace ID as run ID for now
 
-	// Extract model and provider
+	// Extract model and provider. agentgateway natively emits
+	// gen_ai.provider.name; older/vendor-specific traces may still use gen_ai.system.
 	model := getStringAttr(attrs, "gen_ai.request.model", "unknown")
-	provider := getStringAttr(attrs, "gen_ai.system", "unknown")
+	provider := getStringAttrAny(attrs, []string{"gen_ai.provider.name", "gen_ai.system"}, "unknown")
 
 	// Extract prompt (messages)
 	prompt := p.extractPrompt(attrs)
@@ -107,8 +109,8 @@ func (p *Parser) ParseLLMSpan(span ptrace.Span, resource pcommon.Resource) *stor
 	parameters := p.extractParameters(attrs)
 
 	// Extract token counts
-	promptTokens := getIntAttr(attrs, "gen_ai.usage.input_tokens", 0)
-	completionTokens := getIntAttr(attrs, "gen_ai.usage.output_tokens", 0)
+	promptTokens := getIntAttrAny(attrs, []string{"gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens"}, 0)
+	completionTokens := getIntAttrAny(attrs, []string{"gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens"}, 0)
 	totalTokens := promptTokens + completionTokens
 
 	// Calculate latency
@@ -135,7 +137,7 @@ func (p *Parser) ParseLLMSpan(span ptrace.Span, resource pcommon.Resource) *stor
 
 // extractPrompt extracts prompt messages from gen_ai.prompt.* attributes
 func (p *Parser) extractPrompt(attrs pcommon.Map) storage.JSONB {
-	messages := []map[string]string{}
+	messages := []map[string]interface{}{}
 	index := 0
 
 	for {
@@ -149,10 +151,21 @@ func (p *Parser) extractPrompt(attrs pcommon.Map) storage.JSONB {
 			break
 		}
 
-		messages = append(messages, map[string]string{
+		message := map[string]interface{}{
 			"role":    roleAttr.Str(),
 			"content": contentAttr.Str(),
-		})
+		}
+		if attr, ok := attrs.Get(fmt.Sprintf("gen_ai.prompt.%d.name", index)); ok {
+			message["name"] = attr.Str()
+		}
+		if attr, ok := attrs.Get(fmt.Sprintf("gen_ai.prompt.%d.tool_call_id", index)); ok {
+			message["tool_call_id"] = attr.Str()
+		}
+		if rawToolCalls, ok := extractOptionalJSONAttr(attrs, fmt.Sprintf("gen_ai.prompt.%d.tool_calls", index)); ok {
+			message["tool_calls"] = rawToolCalls
+		}
+
+		messages = append(messages, message)
 
 		index++
 	}
@@ -161,7 +174,15 @@ func (p *Parser) extractPrompt(attrs pcommon.Map) storage.JSONB {
 		return storage.JSONB{}
 	}
 
-	return storage.JSONB{"messages": messages}
+	prompt := storage.JSONB{"messages": messages}
+	if tools, ok := extractOptionalJSONAttr(attrs, "gen_ai.request.tools"); ok {
+		prompt["tools"] = tools
+	}
+	if toolChoice, ok := extractOptionalJSONAttr(attrs, "gen_ai.request.tool_choice"); ok {
+		prompt["tool_choice"] = toolChoice
+	}
+
+	return prompt
 }
 
 // extractCompletion extracts completion from gen_ai.completion.* attributes
@@ -327,9 +348,27 @@ func getStringAttr(attrs pcommon.Map, key string, defaultVal string) string {
 	return defaultVal
 }
 
+func getStringAttrAny(attrs pcommon.Map, keys []string, defaultVal string) string {
+	for _, key := range keys {
+		if attr, ok := attrs.Get(key); ok {
+			return attr.Str()
+		}
+	}
+	return defaultVal
+}
+
 func getIntAttr(attrs pcommon.Map, key string, defaultVal int) int {
 	if attr, ok := attrs.Get(key); ok {
 		return int(attr.Int())
+	}
+	return defaultVal
+}
+
+func getIntAttrAny(attrs pcommon.Map, keys []string, defaultVal int) int {
+	for _, key := range keys {
+		if attr, ok := attrs.Get(key); ok {
+			return int(attr.Int())
+		}
 	}
 	return defaultVal
 }
@@ -366,6 +405,28 @@ func valueToInterface(v pcommon.Value) interface{} {
 		return result
 	default:
 		return nil
+	}
+}
+
+func extractOptionalJSONAttr(attrs pcommon.Map, key string) (interface{}, bool) {
+	attr, ok := attrs.Get(key)
+	if !ok {
+		return nil, false
+	}
+
+	switch attr.Type() {
+	case pcommon.ValueTypeStr:
+		var decoded interface{}
+		if err := json.Unmarshal([]byte(attr.Str()), &decoded); err == nil {
+			return decoded, true
+		}
+		return attr.Str(), true
+	case pcommon.ValueTypeMap:
+		return attributesToJSON(attr.Map()), true
+	case pcommon.ValueTypeSlice:
+		return valueToInterface(attr), true
+	default:
+		return valueToInterface(attr), true
 	}
 }
 
@@ -407,9 +468,10 @@ func calculateArgsHash(args storage.JSONB) string {
 }
 
 // normalizeValue recursively normalizes a value for canonical JSON hashing.
-// - map keys are sorted by json.Marshal
-// - all numeric types are coerced to float64 for consistency
-//   (JSON numbers from Unmarshal are always float64, but Go code may produce int/int64)
+//   - map keys are sorted by json.Marshal
+//   - integers stay integers to avoid precision collapse for large values
+//   - whole floats become integers so 2 and 2.0 hash identically
+//   - non-whole floats remain floats
 func normalizeValue(v interface{}) interface{} {
 	switch val := v.(type) {
 	case map[string]interface{}:
@@ -431,21 +493,50 @@ func normalizeValue(v interface{}) interface{} {
 		}
 		return normalized
 	case int:
-		return float64(val)
+		return int64(val)
 	case int64:
-		return float64(val)
+		return val
 	case int32:
-		return float64(val)
+		return int64(val)
+	case int16:
+		return int64(val)
+	case int8:
+		return int64(val)
+	case uint:
+		return uint64(val)
+	case uint64:
+		return val
+	case uint32:
+		return uint64(val)
+	case uint16:
+		return uint64(val)
+	case uint8:
+		return uint64(val)
 	case float32:
-		return float64(val)
+		return normalizeFloat(float64(val))
+	case float64:
+		return normalizeFloat(val)
 	case json.Number:
+		if i, err := val.Int64(); err == nil {
+			return i
+		}
 		if f, err := val.Float64(); err == nil {
-			return f
+			return normalizeFloat(f)
 		}
 		return val.String()
 	default:
 		return v
 	}
+}
+
+func normalizeFloat(v float64) interface{} {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return v
+	}
+	if math.Trunc(v) == v && v >= math.MinInt64 && v <= math.MaxInt64 {
+		return int64(v)
+	}
+	return v
 }
 
 func determineRiskClass(toolName string, args storage.JSONB) string {

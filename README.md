@@ -35,7 +35,7 @@ agentgateway (or any OTLP emitter)
         v
 +-------------------------------+       +-------------------------------+
 | PostgreSQL                    |       | agentgateway                  |
-| - otel_traces                 |       | (OpenAI-compatible LLM proxy) |
+| - otel_traces                 |       | (LLM + MCP proxy)             |
 | - replay_traces               |       +-------------------------------+
 | - tool_captures               |                   ^
 | - baselines / drift_results   |                   |
@@ -151,6 +151,20 @@ cmdr demo gate --baseline demo-baseline-001 --model claude-3-5-sonnet  # exits 0
 
 Full presenter script and expected outputs: [docs/DEMO.md](docs/DEMO.md)
 
+Run the full database migration demo with saved artifacts:
+
+```bash
+cmdr demo migration run
+```
+
+This writes a self-contained artifact bundle with logs, structured results, a markdown report, a judge highlight, and a demo script.
+
+Show the newest saved migration demo bundle:
+
+```bash
+cmdr demo migration latest
+```
+
 ## Command Status
 
 - `cmdr serve`: implemented
@@ -161,6 +175,9 @@ Full presenter script and expected outputs: [docs/DEMO.md](docs/DEMO.md)
 - `cmdr gate check`: implemented (structural + semantic diff)
 - `cmdr gate report`: implemented
 - `cmdr demo {seed,gate}`: implemented (deterministic hackathon demo commands)
+- `cmdr demo migration run`: implemented
+- `cmdr demo migration latest`: implemented
+- `cmdr demo migration verdict`: implemented
 - `cmdr experiment *`: scaffold only (prints not implemented)
 - `cmdr eval *`: scaffold only (prints not implemented)
 - `cmdr ground-truth *`: scaffold only (prints not implemented)
@@ -183,6 +200,21 @@ make fmt
 
 - Pure unit packages (`pkg/config`, `pkg/drift`, `pkg/otelreceiver`, `pkg/agwclient`, `pkg/diff`, `pkg/replay`) run without PostgreSQL.
 - Storage tests (`pkg/storage`) require a reachable PostgreSQL instance at `CMDR_POSTGRES_URL`.
+- Freeze contract e2e test (`test/e2e/freeze_contract_test.go`) is opt-in:
+  - Start freeze-mcp (`python -m freeze_mcp.server`) against the same PostgreSQL.
+  - Run: `make test-e2e-freeze-contract`
+  - Optional endpoint overrides: `E2E_FREEZE_HEALTH_URL`, `E2E_FREEZE_MCP_URL`.
+- Replay + freeze e2e test (`test/e2e/replay_freeze_test.go`) is opt-in:
+  - Start CMDR (`cmdr serve`) and freeze-mcp (`python -m freeze_mcp.server`) against the same PostgreSQL.
+  - Run: `make test-e2e-replay-freeze`
+  - Optional endpoint overrides: `E2E_OTLP_HEALTH_URL`, `E2E_OTLP_INGEST_URL`, `E2E_FREEZE_HEALTH_URL`, `E2E_FREEZE_MCP_URL`.
+- Migration demo full-loop harness:
+  - Uses Docker PostgreSQL, CMDR, agentgateway, a mock migration MCP server, and freeze-mcp.
+  - Preferred entrypoint: `cmdr demo migration run`
+  - Latest artifact summary: `cmdr demo migration latest`
+  - Run: `make test-migration-demo-full-loop`
+  - Native verdict: `cmdr demo migration verdict --baseline <trace> --candidate <trace>`
+  - Full runbook: [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md)
 
 ## Project Layout
 
@@ -214,6 +246,10 @@ notes/                    # implementation notes + planning
 
 - [docs/QUICKSTART.md](docs/QUICKSTART.md)
 - [docs/LOCAL_DEV_SETUP.md](docs/LOCAL_DEV_SETUP.md)
+- [docs/E2E_DEMO_PLAN.md](docs/E2E_DEMO_PLAN.md)
+- [docs/AGENTGATEWAY_CAPTURE.md](docs/AGENTGATEWAY_CAPTURE.md)
+- [docs/FREEZE_AGENT_LOOP.md](docs/FREEZE_AGENT_LOOP.md)
+- [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md)
 - [docs/OTLP_RECEIVER.md](docs/OTLP_RECEIVER.md)
 - [docs/TESTING_OTLP.md](docs/TESTING_OTLP.md)
 - [docs/DEBUGGING_OTLP.md](docs/DEBUGGING_OTLP.md)
@@ -225,4 +261,5 @@ notes/                    # implementation notes + planning
 
 Built for MCP_HACK//26 (Secure & Govern MCP), with a governance-first focus:
 - detect production drift from known-good behavior
-- eventually gate model/prompt rollouts with deterministic replay
+- gate model/prompt rollouts with replay-driven behavior comparison
+- make `agentgateway` the primary capture and replay integration

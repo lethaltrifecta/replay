@@ -20,15 +20,15 @@ func makeTrace(stepIndex, totalTokens, latencyMS int) *storage.ReplayTrace {
 
 func TestCompare(t *testing.T) {
 	tests := []struct {
-		name            string
-		baseline        []*storage.ReplayTrace
-		variant         []*storage.ReplayTrace
-		threshold       float64
-		wantVerdict     string
-		wantScoreMin    float64
-		wantScoreMax    float64
-		wantStepCount   int
-		wantTokenDelta  int
+		name             string
+		baseline         []*storage.ReplayTrace
+		variant          []*storage.ReplayTrace
+		threshold        float64
+		wantVerdict      string
+		wantScoreMin     float64
+		wantScoreMax     float64
+		wantStepCount    int
+		wantTokenDelta   int
 		wantLatencyDelta int
 	}{
 		{
@@ -116,10 +116,10 @@ func TestCompare(t *testing.T) {
 				makeTrace(0, 100, 200),
 				makeTrace(1, 100, 200),
 			},
-			threshold:   1.0, // exact match required
-			wantVerdict: "pass",
-			wantScoreMin: 1.0,
-			wantScoreMax: 1.0,
+			threshold:        1.0, // exact match required
+			wantVerdict:      "pass",
+			wantScoreMin:     1.0,
+			wantScoreMax:     1.0,
 			wantStepCount:    2,
 			wantTokenDelta:   0,
 			wantLatencyDelta: 0,
@@ -134,18 +134,18 @@ func TestCompare(t *testing.T) {
 				makeTrace(0, 110, 210),
 				makeTrace(1, 160, 310),
 			},
-			threshold:   1.0, // exact match required
-			wantVerdict: "fail",
-			wantScoreMin: 0.8,
-			wantScoreMax: 0.99,
+			threshold:        1.0, // exact match required
+			wantVerdict:      "fail",
+			wantScoreMin:     0.8,
+			wantScoreMax:     0.99,
 			wantStepCount:    2,
 			wantTokenDelta:   20,
 			wantLatencyDelta: 20,
 		},
 		{
-			name:     "empty baseline and variant",
-			baseline: []*storage.ReplayTrace{},
-			variant:  []*storage.ReplayTrace{},
+			name:             "empty baseline and variant",
+			baseline:         []*storage.ReplayTrace{},
+			variant:          []*storage.ReplayTrace{},
 			threshold:        0.8,
 			wantVerdict:      "pass",
 			wantScoreMin:     1.0,
@@ -385,4 +385,21 @@ func TestToAnalysisResult_WithSemanticData(t *testing.T) {
 	assert.NotEmpty(t, result.QualityMetrics)
 	assert.InDelta(t, 0.75, result.QualityMetrics["content_overlap"], 0.01)
 	assert.InDelta(t, 0.925, result.QualityMetrics["tool_call_score"], 0.01)
+}
+
+func TestFindFirstDivergence_ResponseContentIncludesExcerpts(t *testing.T) {
+	baseline := []*storage.ReplayTrace{
+		makeTraceWithCompletion(0, 100, 100, "Investigate the Kubernetes deployment before taking action."),
+	}
+	variant := []*storage.ReplayTrace{
+		makeTraceWithCompletion(0, 100, 100, "Delete the deployment immediately and recreate it from scratch."),
+	}
+
+	got := findFirstDivergence(baseline, variant, nil, nil)
+
+	require.NotNil(t, got)
+	assert.Equal(t, "response_content", got["type"])
+	assert.Equal(t, 0, got["step_index"])
+	assert.Contains(t, got["baseline_excerpt"], "Investigate")
+	assert.Contains(t, got["variant_excerpt"], "Delete")
 }

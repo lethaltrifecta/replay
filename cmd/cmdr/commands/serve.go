@@ -34,16 +34,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	if err := cfg.RequireAgentgateway(); err != nil {
-		return fmt.Errorf("config validation failed: %w", err)
-	}
-
 	// Initialize logger
 	log, err := logger.New(cfg.LogLevel)
 	if err != nil {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
 	defer func() { _ = log.Sync() }()
+
+	if cfg.AgentgatewayURL == "" {
+		log.Warn("CMDR_AGENTGATEWAY_URL is not set; OTLP capture is available, but replay/gate commands still require agentgateway")
+	}
 
 	log.Info("Starting CMDR service",
 		"version", version,

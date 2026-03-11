@@ -38,21 +38,39 @@ type FunctionCall struct {
 	Arguments string `json:"arguments"` // raw JSON string
 }
 
+// ToolDefinition represents an OpenAI-compatible tool definition.
+type ToolDefinition struct {
+	Type     string              `json:"type"`
+	Function *FunctionDefinition `json:"function,omitempty"`
+}
+
+// FunctionDefinition represents a callable function schema.
+type FunctionDefinition struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Parameters  map[string]interface{} `json:"parameters,omitempty"`
+}
+
 // ChatMessage represents a single message in a chat conversation.
 type ChatMessage struct {
-	Role      string             `json:"role"`
-	Content   string             `json:"content"`
-	ToolCalls []ToolCallResponse `json:"tool_calls,omitempty"`
+	Role       string             `json:"role"`
+	Content    string             `json:"content,omitempty"`
+	Name       string             `json:"name,omitempty"`
+	ToolCallID string             `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCallResponse `json:"tool_calls,omitempty"`
 }
 
 // CompletionRequest is the request body for the chat completions endpoint.
 type CompletionRequest struct {
-	Model       string        `json:"model"`
-	Messages    []ChatMessage `json:"messages"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	TopP        *float64      `json:"top_p,omitempty"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
-	Stream      bool          `json:"stream"`
+	Model       string            `json:"model"`
+	Messages    []ChatMessage     `json:"messages"`
+	Tools       []ToolDefinition  `json:"tools,omitempty"`
+	ToolChoice  interface{}       `json:"tool_choice,omitempty"`
+	Temperature *float64          `json:"temperature,omitempty"`
+	TopP        *float64          `json:"top_p,omitempty"`
+	MaxTokens   *int              `json:"max_tokens,omitempty"`
+	Stream      bool              `json:"stream"`
+	Headers     map[string]string `json:"-"`
 }
 
 // CompletionResponse is the response body from the chat completions endpoint.
@@ -115,7 +133,7 @@ func (c *Client) Complete(ctx context.Context, req *CompletionRequest) (*Complet
 			}
 		}
 
-		resp, err := c.doRequest(ctx, url, body)
+		resp, err := c.doRequest(ctx, url, body, req.Headers)
 		if err != nil {
 			// Non-retryable errors (4xx except 429) fail immediately
 			if _, ok := err.(*NonRetryableError); ok {
@@ -137,12 +155,15 @@ func (c *Client) Complete(ctx context.Context, req *CompletionRequest) (*Complet
 
 // doRequest performs a single HTTP request and returns the parsed response or an error.
 // Returns a retryable error for 429/5xx, a non-retryable error for other 4xx.
-func (c *Client) doRequest(ctx context.Context, url string, body []byte) (*CompletionResponse, error) {
+func (c *Client) doRequest(ctx context.Context, url string, body []byte, headers map[string]string) (*CompletionResponse, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		httpReq.Header.Set(key, value)
+	}
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
