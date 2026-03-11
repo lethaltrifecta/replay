@@ -13,10 +13,11 @@ import (
 // --- Request / Response types ---
 
 type gateCheckRequest struct {
-	BaselineTraceID string   `json:"baseline_trace_id"`
-	Model           string   `json:"model"`
-	Provider        string   `json:"provider"`
-	Threshold       *float64 `json:"threshold"`
+	BaselineTraceID string            `json:"baseline_trace_id"`
+	Model           string            `json:"model"`
+	Provider        string            `json:"provider"`
+	Threshold       *float64          `json:"threshold"`
+	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
 }
 
 type gateCheckResponse struct {
@@ -80,8 +81,9 @@ func (s *Server) handleGateCheck(w http.ResponseWriter, r *http.Request) {
 	// Build engine and run Setup synchronously to get experiment ID
 	engine := replay.NewEngine(s.store, s.completer)
 	variant := replay.VariantConfig{
-		Model:    req.Model,
-		Provider: req.Provider,
+		Model:          req.Model,
+		Provider:       req.Provider,
+		RequestHeaders: req.RequestHeaders,
 	}
 
 	prepared, err := engine.Setup(r.Context(), req.BaselineTraceID, variant)

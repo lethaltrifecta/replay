@@ -80,7 +80,7 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	if server != "" {
-		return runGateCheckRemote(cmd, server, baselineTraceID, model, provider, threshold)
+		return runGateCheckRemote(cmd, server, baselineTraceID, model, provider, requestHeaders, threshold)
 	}
 
 	return runGateCheckLocal(cmd, baselineTraceID, model, provider, requestHeaders, threshold)
@@ -190,10 +190,11 @@ var ErrGateFailed = errors.New("gate check failed")
 // --- Remote execution via HTTP API ---
 
 type remoteCheckRequest struct {
-	BaselineTraceID string  `json:"baseline_trace_id"`
-	Model           string  `json:"model"`
-	Provider        string  `json:"provider,omitempty"`
-	Threshold       float64 `json:"threshold"`
+	BaselineTraceID string            `json:"baseline_trace_id"`
+	Model           string            `json:"model"`
+	Provider        string            `json:"provider,omitempty"`
+	Threshold       float64           `json:"threshold"`
+	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
 }
 
 type remoteCheckResponse struct {
@@ -220,7 +221,7 @@ type remoteReportResponse struct {
 	Error           string   `json:"error,omitempty"`
 }
 
-func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, provider string, threshold float64) error {
+func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, provider string, requestHeaders map[string]string, threshold float64) error {
 	serverURL := strings.TrimRight(server, "/")
 
 	// Submit gate check
@@ -229,6 +230,7 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 		Model:           model,
 		Provider:        provider,
 		Threshold:       threshold,
+		RequestHeaders:  requestHeaders,
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {

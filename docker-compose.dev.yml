@@ -1,0 +1,143 @@
+# Dev stack: replay (CMDR) + agentgateway + mock LLM + freeze-mcp + PostgreSQL
+#
+# NOTE: Stop the base docker-compose.yml stack first to avoid port conflicts:
+#   docker compose down
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d        # start all
+#   docker compose -f docker-compose.dev.yml logs -f cmdr  # tail CMDR logs
+#   docker compose -f docker-compose.dev.yml down          # stop all
+#
+# Once running:
+#   - CMDR API:        http://localhost:8080
+#   - CMDR OTLP gRPC:  localhost:4317
+#   - CMDR OTLP HTTP:  http://localhost:4318
+#   - agentgateway LLM proxy:  http://localhost:3001
+#   - agentgateway MCP proxy:  http://localhost:3003
+#   - freeze-mcp:      http://localhost:9090
+#   - Jaeger UI:        http://localhost:16686
+#
+# Seed baseline data:
+#   docker compose -f docker-compose.dev.yml exec cmdr /bin/cmdr demo seed
+#
+# Test gate check via API:
+#   curl -X POST http://localhost:8080/api/v1/gate/check \
+#     -H 'Content-Type: application/json' \
+#     -d '{"baseline_trace_id":"demo-baseline-001","model":"mock-model","request_headers":{"X-Freeze-Trace-ID":"demo-baseline-001"}}'
+
+services:
+  # --- Infrastructure ---
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: cmdr-dev-postgres
+    environment:
+      POSTGRES_USER: cmdr
+      POSTGRES_PASSWORD: cmdr_dev_password
+      POSTGRES_DB: cmdr
+    ports:
+      - "5432:5432"
+    volumes:
+      - dev_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cmdr"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: cmdr-dev-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "14268:14268"   # Jaeger collector HTTP
+      # OTLP ports NOT exposed — CMDR owns 4317/4318
+
+  # --- CMDR (replay) ---
+
+  cmdr:
+    build: .
+    container_name: cmdr-dev-cmdr
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CMDR_API_PORT: "8080"
+      CMDR_LOG_LEVEL: debug
+      CMDR_POSTGRES_URL: postgres://cmdr:cmdr_dev_password@postgres:5432/cmdr?sslmode=disable
+      CMDR_AGENTGATEWAY_URL: http://agentgateway:3001
+      CMDR_OTLP_GRPC_ENDPOINT: 0.0.0.0:4317
+      CMDR_OTLP_HTTP_ENDPOINT: 0.0.0.0:4318
+    ports:
+      - "8080:8080"    # HTTP API
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+    healthcheck:
+      test: ["CMD", "/bin/cmdr", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # --- Mock LLM (OpenAI-compatible) ---
+
+  mock-llm:
+    image: python:3.12-slim
+    container_name: cmdr-dev-mock-llm
+    working_dir: /app
+    volumes:
+      - ./scripts/mock_openai_upstream.py:/app/mock_openai_upstream.py:ro
+    command: >
+      python mock_openai_upstream.py
+        --host 0.0.0.0
+        --port 18080
+        --model mock-model
+        --response-text "Mock response from dev stack."
+    ports:
+      - "18080:18080"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:18080/v1/chat/completions', data=b'{\"model\":\"x\",\"messages\":[]}')\" 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+  # --- agentgateway (LLM + MCP proxy) ---
+
+  agentgateway:
+    image: ghcr.io/agentgateway/agentgateway:latest
+    container_name: cmdr-dev-agentgateway
+    depends_on:
+      mock-llm:
+        condition: service_healthy
+    volumes:
+      - ./scripts/agentgateway-dev-stack.yaml:/etc/agentgateway/config.yaml:ro
+    command: ["-f", "/etc/agentgateway/config.yaml"]
+    ports:
+      - "3001:3001"    # LLM proxy
+      - "3003:3003"    # MCP proxy (for freeze-mcp)
+
+  # --- freeze-mcp (frozen tool responses) ---
+
+  freeze-mcp:
+    build: ../freeze-mcp
+    container_name: cmdr-dev-freeze-mcp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CMDR_POSTGRES_URL: postgres://cmdr:cmdr_dev_password@postgres:5432/cmdr?sslmode=disable
+      FREEZE_PORT: "9090"
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import http.client; c=http.client.HTTPConnection('localhost',9090); c.request('GET','/health'); exit(0 if c.getresponse().status==200 else 1)\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  dev_postgres_data:
