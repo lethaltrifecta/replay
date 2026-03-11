@@ -305,9 +305,13 @@ func extractMessages(prompt storage.JSONB) ([]agwclient.ChatMessage, error) {
 	}
 
 	msgs := make([]agwclient.ChatMessage, 0, len(slice))
-	for _, item := range slice {
+	for i, item := range slice {
+		role := stringValue(item["role"])
+		if role == "" {
+			return nil, fmt.Errorf("message %d missing required 'role' field", i)
+		}
 		msg := agwclient.ChatMessage{
-			Role:       stringValue(item["role"]),
+			Role:       role,
 			Content:    contentToString(item["content"]),
 			Name:       stringValue(item["name"]),
 			ToolCallID: stringValue(item["tool_call_id"]),
@@ -315,7 +319,7 @@ func extractMessages(prompt storage.JSONB) ([]agwclient.ChatMessage, error) {
 		if rawToolCalls, ok := item["tool_calls"]; ok {
 			toolCalls, err := decodeJSONValue[[]agwclient.ToolCallResponse](rawToolCalls)
 			if err != nil {
-				return nil, fmt.Errorf("decode message tool_calls: %w", err)
+				return nil, fmt.Errorf("decode message %d tool_calls: %w", i, err)
 			}
 			msg.ToolCalls = toolCalls
 		}

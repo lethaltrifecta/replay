@@ -97,12 +97,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 		log.Info("OTLP receiver is ready")
 	}
 
-	// Create agentgateway client for replay
-	agwClient := agwclient.NewClient(agwclient.ClientConfig{
-		BaseURL:    cfg.AgentgatewayURL,
-		Timeout:    cfg.AgentgatewayTimeout,
-		MaxRetries: cfg.AgentgatewayRetries,
-	})
+	// Create agentgateway client for replay (nil when URL is not configured)
+	var agwClient *agwclient.Client
+	if cfg.AgentgatewayURL != "" {
+		agwClient = agwclient.NewClient(agwclient.ClientConfig{
+			BaseURL:    cfg.AgentgatewayURL,
+			Timeout:    cfg.AgentgatewayTimeout,
+			MaxRetries: cfg.AgentgatewayRetries,
+		})
+	}
 
 	// Start HTTP API server
 	apiServer := api.NewServer(api.ServerConfig{

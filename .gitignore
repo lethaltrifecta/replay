@@ -47,6 +47,10 @@ temp/
 dist/
 build/
 artifacts/
+/cmdr
+
+# Review artifacts
+tmp_review/
 
 # Python cache
 __pycache__/

@@ -40,10 +40,10 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 if [ -z "$GO_BIN" ]; then
-  if [ -x "/Users/bingtopia/.asdf/installs/golang/1.26.1/go/bin/go" ]; then
-    GO_BIN="/Users/bingtopia/.asdf/installs/golang/1.26.1/go/bin/go"
-  else
-    GO_BIN="go"
+  GO_BIN="$(command -v go 2>/dev/null || true)"
+  if [ -z "$GO_BIN" ]; then
+    echo "go not found in PATH; set GO_BIN explicitly"
+    exit 1
   fi
 fi
 

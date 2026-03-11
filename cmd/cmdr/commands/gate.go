@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"text/tabwriter"
@@ -488,6 +489,12 @@ func formatFirstDivergence(divergence storage.JSONB) string {
 		jaccard, _ := floatValue(divergence["jaccard"])
 		baselineExcerpt, _ := divergence["baseline_excerpt"].(string)
 		variantExcerpt, _ := divergence["variant_excerpt"].(string)
+		if baselineExcerpt == "" {
+			baselineExcerpt = "(no excerpt)"
+		}
+		if variantExcerpt == "" {
+			variantExcerpt = "(no excerpt)"
+		}
 		return fmt.Sprintf("step %d response changed (jaccard=%.2f): baseline=%q variant=%q", stepIndex, jaccard, baselineExcerpt, variantExcerpt)
 	case "step_count":
 		stepIndex, _ := intValue(divergence["step_index"])
@@ -508,9 +515,9 @@ func intValue(v interface{}) (int, bool) {
 	case int64:
 		return int(n), true
 	case float32:
-		return int(n), true
+		return int(math.Round(float64(n))), true
 	case float64:
-		return int(n), true
+		return int(math.Round(n)), true
 	default:
 		return 0, false
 	}
