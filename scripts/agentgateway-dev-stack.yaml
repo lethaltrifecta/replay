@@ -8,11 +8,6 @@ config:
   tracing:
     otlpEndpoint: http://cmdr:4317
     randomSampling: true
-    fields:
-      add:
-        gen_ai.system: 'llm.provider'
-        gen_ai.prompt: 'flattenRecursive(llm.prompt)'
-        gen_ai.completion: 'flattenRecursive(llm.completion.map(c, {"role":"assistant", "content": c}))'
 
 binds:
 - port: 3001
