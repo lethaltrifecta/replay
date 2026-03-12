@@ -73,7 +73,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> dict:
             "warning": "destructive_operation",
         }
 
-    raise ValueError(f"unsupported tool: {name}")
+    return {"error": f"unsupported tool: {name}", "status": "error"}
 
 
 @asynccontextmanager

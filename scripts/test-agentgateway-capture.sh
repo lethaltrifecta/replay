@@ -98,10 +98,11 @@ echo
 
 TRACE_ID=""
 for _ in $(seq 1 30); do
-  TRACE_ID="$(psql -X -A -t -P pager=off "$CMDR_POSTGRES_URL" -c \
+  TRACE_ID="$(psql -X -A -t -P pager=off "$CMDR_POSTGRES_URL" \
+    -v prompt_text="$PROMPT_TEXT" -c \
     "SELECT trace_id
      FROM replay_traces
-     WHERE prompt::text LIKE '%$PROMPT_TEXT%'
+     WHERE prompt::text LIKE '%' || :'prompt_text' || '%'
      ORDER BY created_at DESC
      LIMIT 1;" | tr -d '[:space:]')"
   if [ -n "$TRACE_ID" ]; then
@@ -115,16 +116,18 @@ if [ -z "$TRACE_ID" ]; then
   exit 1
 fi
 
-psql -X -P pager=off "$CMDR_POSTGRES_URL" -c \
+psql -X -P pager=off "$CMDR_POSTGRES_URL" \
+  -v trace_id="$TRACE_ID" -c \
   "SELECT trace_id, provider, model, prompt::text, completion, prompt_tokens, completion_tokens
    FROM replay_traces
-   WHERE trace_id = '$TRACE_ID';"
+   WHERE trace_id = :'trace_id';"
 
-psql -X -P pager=off "$CMDR_POSTGRES_URL" -c \
+psql -X -P pager=off "$CMDR_POSTGRES_URL" \
+  -v trace_id="$TRACE_ID" -c \
   "SELECT trace_id, service_name, span_kind, attributes->>'gen_ai.provider.name' AS provider_name,
           attributes->>'gen_ai.prompt.0.content' AS prompt0
    FROM otel_traces
-   WHERE trace_id = '$TRACE_ID';"
+   WHERE trace_id = :'trace_id';"
 
 echo "mock upstream log: $MOCK_LOG"
 echo "agentgateway log: $AGW_LOG"
