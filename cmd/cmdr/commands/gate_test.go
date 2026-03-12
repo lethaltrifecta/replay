@@ -275,7 +275,7 @@ func TestBuildReplayHeaders(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "baseline-123", headers["X-Freeze-Trace-ID"])
+	assert.Equal(t, "baseline-123", headers["X-Freeze-Trace-Id"])
 	assert.Equal(t, "1", headers["X-Debug"])
 	assert.Equal(t, "incident-triage", headers["X-Scenario"])
 }
@@ -286,4 +286,25 @@ func TestBuildReplayHeaders_InvalidSpec(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, headers)
 	assert.Contains(t, err.Error(), "expected KEY=VALUE")
+}
+
+func TestBuildReplayHeaders_CaseDuplicateRejected(t *testing.T) {
+	headers, err := buildReplayHeaders("", []string{
+		"X-Custom=one",
+		"x-custom=two",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, headers)
+	assert.Contains(t, err.Error(), "case-insensitive collision")
+}
+
+func TestBuildReplayHeaders_FreezeTraceIDCollision(t *testing.T) {
+	headers, err := buildReplayHeaders("baseline-123", []string{
+		"x-freeze-trace-id=other-value",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, headers)
+	assert.Contains(t, err.Error(), "case-insensitive collision")
 }

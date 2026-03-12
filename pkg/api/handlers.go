@@ -45,6 +45,33 @@ type gateReportResponse struct {
 
 // --- Handlers ---
 
+// allowedRequestHeaders is the set of headers that the gate check API accepts.
+// Headers not in this set are silently dropped to prevent sensitive values
+// (e.g. auth tokens) from being persisted in variant_config and echoed in reports.
+var allowedRequestHeaders = map[string]bool{
+	http.CanonicalHeaderKey("X-Freeze-Trace-ID"):   true,
+	http.CanonicalHeaderKey("X-Freeze-Span-ID"):    true,
+	http.CanonicalHeaderKey("X-Freeze-Step-Index"): true,
+}
+
+// sanitizeRequestHeaders canonicalizes keys and filters to the allowlist.
+func sanitizeRequestHeaders(raw map[string]string) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	sanitized := make(map[string]string, len(raw))
+	for k, v := range raw {
+		canonical := http.CanonicalHeaderKey(k)
+		if allowedRequestHeaders[canonical] {
+			sanitized[canonical] = v
+		}
+	}
+	if len(sanitized) == 0 {
+		return nil
+	}
+	return sanitized
+}
+
 func (s *Server) handleGateCheck(w http.ResponseWriter, r *http.Request) {
 	var req gateCheckRequest
 	if err := readJSON(r, &req); err != nil {
@@ -83,7 +110,7 @@ func (s *Server) handleGateCheck(w http.ResponseWriter, r *http.Request) {
 	variant := replay.VariantConfig{
 		Model:          req.Model,
 		Provider:       req.Provider,
-		RequestHeaders: req.RequestHeaders,
+		RequestHeaders: sanitizeRequestHeaders(req.RequestHeaders),
 	}
 
 	prepared, err := engine.Setup(r.Context(), req.BaselineTraceID, variant)

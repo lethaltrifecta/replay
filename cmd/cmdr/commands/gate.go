@@ -538,7 +538,7 @@ func floatValue(v interface{}) (float64, bool) {
 func buildReplayHeaders(freezeTraceID string, headerSpecs []string) (map[string]string, error) {
 	headers := map[string]string{}
 	if freezeTraceID != "" {
-		headers["X-Freeze-Trace-ID"] = freezeTraceID
+		headers[http.CanonicalHeaderKey("X-Freeze-Trace-ID")] = freezeTraceID
 	}
 
 	for _, spec := range headerSpecs {
@@ -546,7 +546,11 @@ func buildReplayHeaders(freezeTraceID string, headerSpecs []string) (map[string]
 		if !ok || key == "" {
 			return nil, fmt.Errorf("invalid --request-header %q: expected KEY=VALUE", spec)
 		}
-		headers[key] = value
+		canonical := http.CanonicalHeaderKey(key)
+		if _, exists := headers[canonical]; exists {
+			return nil, fmt.Errorf("duplicate request header %q (case-insensitive collision)", key)
+		}
+		headers[canonical] = value
 	}
 
 	if len(headers) == 0 {
