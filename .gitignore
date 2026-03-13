@@ -55,3 +55,5 @@ tmp_review/
 # Python cache
 __pycache__/
 scripts/__pycache__/
+
+thoughts/**
