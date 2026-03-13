@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"reflect"
 
 	"github.com/lethaltrifecta/replay/pkg/replay"
 	"github.com/lethaltrifecta/replay/pkg/storage"
@@ -30,6 +31,12 @@ type Server struct {
 
 // NewServer creates a new API server.
 func NewServer(cfg ServerConfig, store storage.Storage, completer replay.Completer, log *logger.Logger) *Server {
+	// Normalize typed nil to untyped nil so s.completer == nil works reliably.
+	// In Go, a nil *ConcreteType stored in an interface is non-nil.
+	if completer != nil && reflect.ValueOf(completer).IsNil() {
+		completer = nil
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Server{

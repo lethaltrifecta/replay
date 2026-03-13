@@ -14,6 +14,7 @@ import (
 	"github.com/lethaltrifecta/replay/pkg/api"
 	"github.com/lethaltrifecta/replay/pkg/config"
 	"github.com/lethaltrifecta/replay/pkg/otelreceiver"
+	"github.com/lethaltrifecta/replay/pkg/replay"
 	"github.com/lethaltrifecta/replay/pkg/storage"
 	"github.com/lethaltrifecta/replay/pkg/utils/logger"
 )
@@ -98,9 +99,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create agentgateway client for replay (nil when URL is not configured)
-	var agwClient *agwclient.Client
+	var completer replay.Completer
 	if cfg.AgentgatewayURL != "" {
-		agwClient = agwclient.NewClient(agwclient.ClientConfig{
+		completer = agwclient.NewClient(agwclient.ClientConfig{
 			BaseURL:    cfg.AgentgatewayURL,
 			Timeout:    cfg.AgentgatewayTimeout,
 			MaxRetries: cfg.AgentgatewayRetries,
@@ -111,7 +112,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	apiServer := api.NewServer(api.ServerConfig{
 		Port:                 cfg.APIPort,
 		MaxConcurrentReplays: cfg.MaxConcurrentReplays,
-	}, store, agwClient, log)
+	}, store, completer, log)
 
 	apiDone := make(chan error, 1)
 	go func() {

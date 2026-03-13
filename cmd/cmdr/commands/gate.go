@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lethaltrifecta/replay/pkg/agwclient"
+	"github.com/lethaltrifecta/replay/pkg/api"
 	"github.com/lethaltrifecta/replay/pkg/config"
 	"github.com/lethaltrifecta/replay/pkg/diff"
 	"github.com/lethaltrifecta/replay/pkg/replay"
@@ -116,7 +117,7 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 	variant := replay.VariantConfig{
 		Model:          model,
 		Provider:       provider,
-		RequestHeaders: requestHeaders,
+		RequestHeaders: api.SanitizeRequestHeaders(requestHeaders),
 	}
 
 	// Run replay

@@ -54,8 +54,8 @@ var allowedRequestHeaders = map[string]bool{
 	http.CanonicalHeaderKey("X-Freeze-Step-Index"): true,
 }
 
-// sanitizeRequestHeaders canonicalizes keys and filters to the allowlist.
-func sanitizeRequestHeaders(raw map[string]string) map[string]string {
+// SanitizeRequestHeaders canonicalizes keys and filters to the allowlist.
+func SanitizeRequestHeaders(raw map[string]string) map[string]string {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -105,12 +105,19 @@ func (s *Server) handleGateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Guard: replay requires an agentgateway completer
+	if s.completer == nil {
+		<-s.sem
+		writeError(w, http.StatusServiceUnavailable, "agentgateway is not configured; replay/gate operations require CMDR_AGENTGATEWAY_URL")
+		return
+	}
+
 	// Build engine and run Setup synchronously to get experiment ID
 	engine := replay.NewEngine(s.store, s.completer)
 	variant := replay.VariantConfig{
 		Model:          req.Model,
 		Provider:       req.Provider,
-		RequestHeaders: sanitizeRequestHeaders(req.RequestHeaders),
+		RequestHeaders: SanitizeRequestHeaders(req.RequestHeaders),
 	}
 
 	prepared, err := engine.Setup(r.Context(), req.BaselineTraceID, variant)
