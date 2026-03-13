@@ -481,3 +481,45 @@ func TestHandleHealth_Degraded(t *testing.T) {
 }
 
 func floatPtr(f float64) *float64 { return &f }
+
+func TestSanitizeRequestHeaders_AllowlistFilters(t *testing.T) {
+	result := sanitizeRequestHeaders(map[string]string{
+		"X-Freeze-Trace-ID": "trace-1",
+		"Authorization":     "Bearer sk-secret",
+		"X-Custom":          "should-be-dropped",
+	})
+
+	assert.Equal(t, "trace-1", result["X-Freeze-Trace-Id"])
+	assert.Empty(t, result["Authorization"])
+	assert.Empty(t, result["X-Custom"])
+	assert.Len(t, result, 1)
+}
+
+func TestSanitizeRequestHeaders_CanonicalizesKeys(t *testing.T) {
+	result := sanitizeRequestHeaders(map[string]string{
+		"x-freeze-trace-id": "trace-1",
+		"X-FREEZE-SPAN-ID":  "span-1",
+	})
+
+	assert.Equal(t, "trace-1", result["X-Freeze-Trace-Id"])
+	assert.Equal(t, "span-1", result["X-Freeze-Span-Id"])
+}
+
+func TestSanitizeRequestHeaders_NilOnEmpty(t *testing.T) {
+	assert.Nil(t, sanitizeRequestHeaders(nil))
+	assert.Nil(t, sanitizeRequestHeaders(map[string]string{}))
+	assert.Nil(t, sanitizeRequestHeaders(map[string]string{"Authorization": "secret"}))
+}
+
+func TestSanitizeRequestHeaders_AllFreeze(t *testing.T) {
+	result := sanitizeRequestHeaders(map[string]string{
+		"X-Freeze-Trace-ID":   "trace-1",
+		"X-Freeze-Span-ID":    "span-1",
+		"X-Freeze-Step-Index": "2",
+	})
+
+	assert.Len(t, result, 3)
+	assert.Equal(t, "trace-1", result["X-Freeze-Trace-Id"])
+	assert.Equal(t, "span-1", result["X-Freeze-Span-Id"])
+	assert.Equal(t, "2", result["X-Freeze-Step-Index"])
+}

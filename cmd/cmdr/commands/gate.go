@@ -81,7 +81,7 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	if server != "" {
-		return runGateCheckRemote(cmd, server, baselineTraceID, model, provider, threshold)
+		return runGateCheckRemote(cmd, server, baselineTraceID, model, provider, requestHeaders, threshold)
 	}
 
 	return runGateCheckLocal(cmd, baselineTraceID, model, provider, requestHeaders, threshold)
@@ -191,10 +191,11 @@ var ErrGateFailed = errors.New("gate check failed")
 // --- Remote execution via HTTP API ---
 
 type remoteCheckRequest struct {
-	BaselineTraceID string  `json:"baseline_trace_id"`
-	Model           string  `json:"model"`
-	Provider        string  `json:"provider,omitempty"`
-	Threshold       float64 `json:"threshold"`
+	BaselineTraceID string            `json:"baseline_trace_id"`
+	Model           string            `json:"model"`
+	Provider        string            `json:"provider,omitempty"`
+	Threshold       float64           `json:"threshold"`
+	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
 }
 
 type remoteCheckResponse struct {
@@ -221,7 +222,7 @@ type remoteReportResponse struct {
 	Error           string   `json:"error,omitempty"`
 }
 
-func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, provider string, threshold float64) error {
+func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, provider string, requestHeaders map[string]string, threshold float64) error {
 	serverURL := strings.TrimRight(server, "/")
 
 	// Submit gate check
@@ -230,6 +231,7 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 		Model:           model,
 		Provider:        provider,
 		Threshold:       threshold,
+		RequestHeaders:  requestHeaders,
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -543,7 +545,7 @@ func floatValue(v interface{}) (float64, bool) {
 func buildReplayHeaders(freezeTraceID string, headerSpecs []string) (map[string]string, error) {
 	headers := map[string]string{}
 	if freezeTraceID != "" {
-		headers["X-Freeze-Trace-ID"] = freezeTraceID
+		headers[http.CanonicalHeaderKey("X-Freeze-Trace-ID")] = freezeTraceID
 	}
 
 	for _, spec := range headerSpecs {
@@ -551,7 +553,11 @@ func buildReplayHeaders(freezeTraceID string, headerSpecs []string) (map[string]
 		if !ok || key == "" {
 			return nil, fmt.Errorf("invalid --request-header %q: expected KEY=VALUE", spec)
 		}
-		headers[key] = value
+		canonical := http.CanonicalHeaderKey(key)
+		if _, exists := headers[canonical]; exists {
+			return nil, fmt.Errorf("duplicate request header %q (case-insensitive collision)", key)
+		}
+		headers[canonical] = value
 	}
 
 	if len(headers) == 0 {
