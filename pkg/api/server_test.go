@@ -483,7 +483,7 @@ func TestHandleHealth_Degraded(t *testing.T) {
 func floatPtr(f float64) *float64 { return &f }
 
 func TestSanitizeRequestHeaders_AllowlistFilters(t *testing.T) {
-	result := sanitizeRequestHeaders(map[string]string{
+	result := SanitizeRequestHeaders(map[string]string{
 		"X-Freeze-Trace-ID": "trace-1",
 		"Authorization":     "Bearer sk-secret",
 		"X-Custom":          "should-be-dropped",
@@ -496,7 +496,7 @@ func TestSanitizeRequestHeaders_AllowlistFilters(t *testing.T) {
 }
 
 func TestSanitizeRequestHeaders_CanonicalizesKeys(t *testing.T) {
-	result := sanitizeRequestHeaders(map[string]string{
+	result := SanitizeRequestHeaders(map[string]string{
 		"x-freeze-trace-id": "trace-1",
 		"X-FREEZE-SPAN-ID":  "span-1",
 	})
@@ -506,13 +506,13 @@ func TestSanitizeRequestHeaders_CanonicalizesKeys(t *testing.T) {
 }
 
 func TestSanitizeRequestHeaders_NilOnEmpty(t *testing.T) {
-	assert.Nil(t, sanitizeRequestHeaders(nil))
-	assert.Nil(t, sanitizeRequestHeaders(map[string]string{}))
-	assert.Nil(t, sanitizeRequestHeaders(map[string]string{"Authorization": "secret"}))
+	assert.Nil(t, SanitizeRequestHeaders(nil))
+	assert.Nil(t, SanitizeRequestHeaders(map[string]string{}))
+	assert.Nil(t, SanitizeRequestHeaders(map[string]string{"Authorization": "secret"}))
 }
 
 func TestSanitizeRequestHeaders_AllFreeze(t *testing.T) {
-	result := sanitizeRequestHeaders(map[string]string{
+	result := SanitizeRequestHeaders(map[string]string{
 		"X-Freeze-Trace-ID":   "trace-1",
 		"X-Freeze-Span-ID":    "span-1",
 		"X-Freeze-Step-Index": "2",
@@ -522,4 +522,60 @@ func TestSanitizeRequestHeaders_AllFreeze(t *testing.T) {
 	assert.Equal(t, "trace-1", result["X-Freeze-Trace-Id"])
 	assert.Equal(t, "span-1", result["X-Freeze-Span-Id"])
 	assert.Equal(t, "2", result["X-Freeze-Step-Index"])
+}
+
+func TestHandleGateCheck_NilCompleter_503(t *testing.T) {
+	store := newMockStorage()
+	seedBaseline(store, "trace-abc", 1)
+
+	// Untyped nil completer
+	log, err := logger.New("debug")
+	require.NoError(t, err)
+	srv := NewServer(ServerConfig{
+		Port:                 0,
+		MaxConcurrentReplays: 5,
+	}, store, nil, log)
+
+	body, _ := json.Marshal(gateCheckRequest{
+		BaselineTraceID: "trace-abc",
+		Model:           "gpt-4",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate/check", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.handleGateCheck(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Contains(t, rec.Body.String(), "agentgateway is not configured")
+}
+
+func TestHandleGateCheck_TypedNilCompleter_503(t *testing.T) {
+	store := newMockStorage()
+	seedBaseline(store, "trace-abc", 1)
+
+	// Typed nil: simulates the serve.go path where *agwclient.Client is nil
+	// but stored in a replay.Completer interface (non-nil interface, nil value).
+	var typedNil *mockCompleter // nil pointer to a concrete type
+	log, err := logger.New("debug")
+	require.NoError(t, err)
+	srv := NewServer(ServerConfig{
+		Port:                 0,
+		MaxConcurrentReplays: 5,
+	}, store, typedNil, log)
+
+	body, _ := json.Marshal(gateCheckRequest{
+		BaselineTraceID: "trace-abc",
+		Model:           "gpt-4",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate/check", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.handleGateCheck(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Contains(t, rec.Body.String(), "agentgateway is not configured")
 }
