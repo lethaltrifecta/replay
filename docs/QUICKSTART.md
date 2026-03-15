@@ -32,7 +32,7 @@ CMDR_OTLP_HTTP_ENDPOINT=0.0.0.0:4318
 ```
 
 Note:
-- `CMDR_AGENTGATEWAY_URL` is required by current config validation even though replay/gate is not implemented yet.
+- `CMDR_AGENTGATEWAY_URL` is required — it's the endpoint used by `cmdr gate check` to replay prompts with variant models.
 
 ## 3) Run CMDR
 
@@ -112,8 +112,10 @@ make lint
 make fmt
 ```
 
-## Current limitations to keep in mind
+## What's available
 
-- `cmdr experiment`, `cmdr eval`, and `cmdr ground-truth` are scaffolds.
-- Deployment gate (`cmdr gate`) is not implemented in this repo yet.
-- No separate public HTTP API server is started by `cmdr serve` today; active endpoints are OTLP + health on the OTLP HTTP listener.
+- `cmdr serve` — OTLP receiver + HTTP API server
+- `cmdr drift baseline {set,list,remove}` — manage baselines
+- `cmdr drift check` — compare traces against baselines
+- `cmdr gate check` — replay baseline with variant model, produce pass/fail verdict
+- `cmdr demo seed` / `cmdr demo gate` — deterministic demo (no external LLM needed)

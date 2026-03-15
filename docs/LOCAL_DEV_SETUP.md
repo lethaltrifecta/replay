@@ -38,7 +38,7 @@ CMDR_OTLP_HTTP_ENDPOINT=0.0.0.0:4318
 ```
 
 Notes:
-- `CMDR_AGENTGATEWAY_URL` is currently required by config validation.
+- `CMDR_AGENTGATEWAY_URL` is required — used by `cmdr gate check` for prompt replay.
 - Copy `.env.example` to `.env` to customize settings.
 
 ## Common workflows
@@ -89,9 +89,9 @@ Set `CMDR_AGENTGATEWAY_URL` in `.env` before running `make run`.
 - check port usage: `lsof -i :4318`
 - health check: `curl -i http://localhost:4318/health`
 
-## Status reminder
+## Available commands
 
-As of this phase:
-- Drift baseline/check is implemented.
-- Experiment/eval/ground-truth commands are still scaffolds.
-- Replay gate flow is planned, not yet implemented.
+- `cmdr serve` — OTLP receiver + HTTP API server
+- `cmdr drift baseline {set,list,remove}` / `cmdr drift check` / `cmdr drift status` / `cmdr drift watch`
+- `cmdr gate check` / `cmdr gate report`
+- `cmdr demo seed` / `cmdr demo gate` / `cmdr demo migration {run,latest,verdict}`

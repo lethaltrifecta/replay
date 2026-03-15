@@ -8,9 +8,9 @@ A deployment gate needs to answer: **"If I swap model A for model B, does the ag
 
 This requires replaying a captured agent run with a different model and comparing the resulting behavior. The replay must be deterministic — the tool environment should be frozen so that only the model's behavior varies, not the external world.
 
-## Current State: Prompt-Only Replay
+## Prompt-Only Replay
 
-Today, `cmdr gate check` uses a prompt-only replay engine (`pkg/replay/engine.go`). For each step in the baseline trace, it sends the **baseline's prompt** to the variant model and records the response.
+The prompt-only replay engine (`pkg/replay/engine.go`) sends the **baseline's prompt** at each step to the variant model and records the response. This is the default mode when freeze-mcp is not available.
 
 ```
 Baseline trace (5 steps):
@@ -26,23 +26,17 @@ Prompt-only replay:
   ...
 ```
 
-### Limitation
+### Tradeoff
 
-The variant model always sees the **baseline's conversation history**, including tool results from the baseline run. The variant's own tool calls are never executed. Each step is evaluated independently — the variant's decision at step 0 does not affect what it sees at step 1.
+This answers: *"Given identical context at each step, does the variant model make similar decisions?"*
 
-This answers a narrow question: *"Given identical context at each step, does the variant model make similar decisions?"*
+It does **not** answer: *"If the variant model actually ran its tools, would the agent complete the task safely?"* — because divergence at step 0 doesn't propagate to step 1 (each step replays the baseline's context).
 
-It does **not** answer: *"If the variant model actually ran its tools, would the agent complete the task safely?"*
+This mode is fast and requires no external infrastructure beyond agentgateway.
 
-Concretely:
+## Agent-Loop Replay with freeze-mcp
 
-- **No cascading divergence.** If the variant calls a different tool at step 0, step 1 still uses the baseline's prompt with the baseline's tool result. The divergence doesn't propagate.
-- **No tool execution.** The variant's tool calls are recorded in metadata but never executed. You can diff which tools were *proposed* but not what would have *happened*.
-- **False confidence.** A variant can "pass" because it produces similar text responses to each baseline prompt, even if its actual agent trajectory would diverge catastrophically.
-
-## Target State: Agent-Loop Replay with freeze-mcp
-
-The target architecture replaces prompt-only replay with a real agent execution loop backed by freeze-mcp for deterministic tool responses.
+The agent-loop replay mode replaces prompt-only replay with a real execution loop backed by freeze-mcp for deterministic tool responses. This is the primary mode when the full stack is available.
 
 ### How It Works
 
@@ -119,9 +113,9 @@ LLM + MCP proxy. Two listeners:
 - **LLM port**: Proxies chat completion requests to the upstream model. Forwards custom headers (including `X-Freeze-Trace-ID`).
 - **MCP port**: Proxies MCP tool calls to freeze-mcp. CORS configured to allow `X-Freeze-Trace-ID`.
 
-### Replay Engine (to be updated)
+### Replay Engine
 
-`pkg/replay/engine.go` currently implements prompt-only replay. The target is to add an agent-loop mode that:
+`pkg/replay/engine.go` implements prompt-only replay and is the foundation for agent-loop mode. The agent-loop extension:
 
 1. Maintains its own conversation history (not the baseline's).
 2. Executes tool calls via an MCP client connected through agentgateway to freeze-mcp.
