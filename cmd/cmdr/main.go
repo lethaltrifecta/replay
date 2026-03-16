@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -14,7 +15,9 @@ var (
 
 func main() {
 	if err := commands.Execute(Version); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if !errors.Is(err, commands.ErrGateFailed) {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
