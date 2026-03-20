@@ -1,0 +1,2 @@
+global golang 1.26.1
+local golang 1.26.1

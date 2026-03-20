@@ -3,20 +3,14 @@
 CMDR (Comparative Model Deterministic Replay) is a governance-oriented trace analysis service for LLM agents.
 It ingests OpenTelemetry spans, stores normalized replay/tool data in PostgreSQL, and compares live traces against approved baselines to detect behavioral drift.
 
-## Current Scope
+## Features
 
-Implemented in this repo:
-- OTLP ingestion (gRPC + HTTP)
-- `gen_ai.*` span parsing into replay-friendly storage models
-- Tool capture extraction with deterministic args hashing + risk classification
-- Baseline management + drift scoring (fingerprint + comparison engine)
-- Drift CLI commands for baseline set/list/remove and trace drift checks
-- Deployment gate: replay baseline prompts with a variant model via agentgateway, diff results with structural + semantic scoring, produce CI/CD pass/fail verdict
-- Semantic diff: tool-call sequence/frequency comparison, risk escalation detection, response divergence (Jaccard + length)
-- Gate CLI commands for replay check and experiment reporting
-
-Planned but not implemented yet:
-- Full experiment/eval/ground-truth CLI workflows (currently scaffolded)
+- **OTLP ingestion** — gRPC + HTTP receivers for OpenTelemetry spans
+- **Span parsing** — `gen_ai.*` attribute extraction into replay-friendly storage models
+- **Tool capture** — deterministic args hashing + risk classification
+- **Drift detection** — behavioral fingerprinting + comparison scoring against baselines
+- **Deployment gate** — replay baseline prompts with a variant model via agentgateway, structural + semantic diff, CI/CD pass/fail verdict
+- **Deterministic demo** — no-external-LLM demo showing drift detection and gate verdicts
 
 ## Architecture
 
@@ -165,22 +159,22 @@ Show the newest saved migration demo bundle:
 cmdr demo migration latest
 ```
 
-## Command Status
+## Commands
 
-- `cmdr serve`: implemented
-- `cmdr drift baseline {set,list,remove}`: implemented
-- `cmdr drift check`: implemented
-- `cmdr drift status`: implemented
-- `cmdr drift watch`: implemented
-- `cmdr gate check`: implemented (structural + semantic diff)
-- `cmdr gate report`: implemented
-- `cmdr demo {seed,gate}`: implemented (deterministic hackathon demo commands)
-- `cmdr demo migration run`: implemented
-- `cmdr demo migration latest`: implemented
-- `cmdr demo migration verdict`: implemented
-- `cmdr experiment *`: scaffold only (prints not implemented)
-- `cmdr eval *`: scaffold only (prints not implemented)
-- `cmdr ground-truth *`: scaffold only (prints not implemented)
+| Command | Description |
+|---------|-------------|
+| `cmdr serve` | Start OTLP receiver + HTTP API server |
+| `cmdr drift baseline {set,list,remove}` | Manage known-good baselines |
+| `cmdr drift check` | Compare a trace against its baseline |
+| `cmdr drift status` | Show drift scores for recent traces |
+| `cmdr drift watch` | Continuous drift monitoring (poll mode) |
+| `cmdr gate check` | Replay baseline with variant model, produce pass/fail verdict |
+| `cmdr gate report` | Show saved experiment results |
+| `cmdr demo seed` | Seed database with deterministic demo data |
+| `cmdr demo gate` | Run gate check with demo models |
+| `cmdr demo migration run` | Full migration demo with saved artifacts |
+| `cmdr demo migration latest` | Show newest migration demo bundle |
+| `cmdr demo migration verdict` | Native verdict for migration traces |
 
 ## Development
 
@@ -221,45 +215,54 @@ make fmt
 ```
 cmd/cmdr/
   commands/
-    serve.go              # OTLP receiver startup
+    serve.go              # OTLP receiver + API server startup
     drift.go              # baseline + drift check commands
     gate.go               # deployment gate check + report
-    experiment.go         # scaffold
-    eval.go               # scaffold
-    ground_truth.go       # scaffold
+    demo.go               # deterministic hackathon demo
 
 pkg/
-  agwclient/              # agentgateway HTTP client (OpenAI-compatible)
+  api/                    # HTTP API server, handlers, middleware
+  agwclient/              # agentgateway HTTP client (OpenAI-compatible, retry)
   config/                 # env-based config loading/validation
-  diff/                   # structural + semantic comparison engine for gate verdicts
+  diff/                   # structural + semantic comparison engine
   drift/                  # fingerprint extraction + comparison scoring
   otelreceiver/           # OTLP receiver + span parsing
   replay/                 # prompt replay orchestration engine
   storage/                # PostgreSQL models, queries, migrations
   utils/logger/           # zap logger wrapper
 
-docs/                     # setup/testing/receiver docs
-notes/                    # implementation notes + planning
+test/e2e/                 # end-to-end tests (freeze contract, replay)
+scripts/                  # dev setup, OTLP testing, demo utilities
+docs/                     # architecture, setup, and demo documentation
 ```
 
 ## Documentation
 
-- [docs/QUICKSTART.md](docs/QUICKSTART.md)
-- [docs/LOCAL_DEV_SETUP.md](docs/LOCAL_DEV_SETUP.md)
-- [docs/E2E_DEMO_PLAN.md](docs/E2E_DEMO_PLAN.md)
-- [docs/AGENTGATEWAY_CAPTURE.md](docs/AGENTGATEWAY_CAPTURE.md)
-- [docs/FREEZE_AGENT_LOOP.md](docs/FREEZE_AGENT_LOOP.md)
-- [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md)
-- [docs/OTLP_RECEIVER.md](docs/OTLP_RECEIVER.md)
-- [docs/TESTING_OTLP.md](docs/TESTING_OTLP.md)
-- [docs/DEBUGGING_OTLP.md](docs/DEBUGGING_OTLP.md)
-- [docs/DEMO.md](docs/DEMO.md)
-- [notes/IMPLEMENTATION_STATUS.md](notes/IMPLEMENTATION_STATUS.md)
-- [docs/REFACTORING.md](docs/REFACTORING.md)
+- [docs/QUICKSTART.md](docs/QUICKSTART.md) — Setup and first commands
+- [docs/LOCAL_DEV_SETUP.md](docs/LOCAL_DEV_SETUP.md) — Local environment guide
+- [docs/DEMO.md](docs/DEMO.md) — Presenter script and expected outputs
+- [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md) — Full migration demo runbook
+- [docs/GATE_REPLAY_ARCHITECTURE.md](docs/GATE_REPLAY_ARCHITECTURE.md) — Gate replay design
+- [docs/DATABASE_LAYER.md](docs/DATABASE_LAYER.md) — Schema overview
+- [docs/AGENTGATEWAY_CAPTURE.md](docs/AGENTGATEWAY_CAPTURE.md) — agentgateway trace capture
+- [docs/FREEZE_AGENT_LOOP.md](docs/FREEZE_AGENT_LOOP.md) — freeze-mcp integration
+- [docs/E2E_DEMO_PLAN.md](docs/E2E_DEMO_PLAN.md) — End-to-end demo walkthrough
+- [docs/OTLP_RECEIVER.md](docs/OTLP_RECEIVER.md) — OTLP receiver implementation details
+- [docs/SUBMISSION_NOTES.md](docs/SUBMISSION_NOTES.md) — Hackathon submission summary
 
 ## Hackathon
 
-Built for MCP_HACK//26 (Secure & Govern MCP), with a governance-first focus:
-- detect production drift from known-good behavior
-- gate model/prompt rollouts with replay-driven behavior comparison
-- make `agentgateway` the primary capture and replay integration
+Built for [MCP_HACK//26](https://aihackathon.dev/) — Secure & Govern MCP.
+
+CMDR is the missing deployment safety layer for MCP agents. It captures real agent behavior from agentgateway, freezes the tool environment with freeze-mcp, replays the same scenario with a candidate model or prompt, and blocks unsafe rollout when tool behavior or risk profile changes.
+
+- **agentgateway** — telemetry source (OTLP traces) and replay proxy (LLM + MCP routing)
+- **freeze-mcp** — serves frozen tool responses at the MCP boundary for deterministic replay
+- **Drift detection** — runtime governance via continuous behavioral fingerprinting
+- **Deployment gates** — pre-deployment governance via replay-based verification with CI/CD exit codes
+
+Full submission details: [docs/SUBMISSION_NOTES.md](docs/SUBMISSION_NOTES.md)
+
+## License
+
+MIT — see [LICENSE](LICENSE).

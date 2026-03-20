@@ -206,31 +206,35 @@ cmd/cmdr/                  # CLI entry point
   commands/
     root.go                # Cobra root command, registers subcommands
     serve.go               # Starts OTLP receiver + API server
-    drift.go               # Drift detection commands (TODO)
-    gate.go                # Deployment gate commands (TODO)
+    drift.go               # Drift detection + baseline management commands
+    gate.go                # Deployment gate check + report commands
+    demo.go                # Deterministic hackathon demo commands
     experiment.go          # Experiment management (scaffolded)
     eval.go                # Evaluation management (scaffolded)
     ground_truth.go        # Ground truth management (scaffolded)
 
 pkg/
+  api/                     # HTTP API server, handlers, middleware pipeline
   config/                  # Environment-based config with validation
   storage/
     interface.go           # Storage interface (traces, experiments, evaluators, etc.)
     models.go              # Data models (OTELTrace, ReplayTrace, ToolCapture, etc.)
     postgres.go            # PostgreSQL implementation
+    postgres_drift.go      # Drift-specific queries (baselines, drift results)
     postgres_eval.go       # Evaluation-specific PostgreSQL methods
     migrations/            # SQL schema migrations (embedded via go:embed)
   otelreceiver/
     receiver.go            # OTLP gRPC + HTTP receiver, stores spans
     parser.go              # Extracts LLM data from gen_ai.* OTEL attributes
-  drift/                   # Drift detection engine (TODO)
-  replay/                  # Prompt replay engine (TODO)
-  agwclient/               # agentgateway HTTP client (TODO)
-  diff/                    # Behavior diff engine (TODO)
+  drift/                   # Fingerprinting + comparison scoring engine
+  replay/                  # Prompt replay orchestration engine
+  agwclient/               # agentgateway HTTP client (OpenAI-compatible, retry)
+  diff/                    # Structural + semantic behavior diff engine
   utils/logger/            # Zap logger wrapper
 
-test/manual/               # Manual integration test scripts
-scripts/                   # Dev setup, OTLP testing, diagnostics
+test/e2e/                  # End-to-end tests (freeze contract, replay integration)
+scripts/                   # Dev setup, OTLP testing, demo utilities
+docs/                      # Architecture, setup, and demo documentation
 ```
 
 ## External Dependencies
@@ -313,11 +317,17 @@ All config via environment variables with `CMDR_` prefix. See `.env.example`. Re
 
 ## Implementation Status
 
-**Done:** Config, PostgreSQL storage (full CRUD), OTLP receiver (gRPC + HTTP), OTEL span parser, CLI scaffolding, Docker/CI/Makefile, freeze-mcp (separate repo, fully built).
+**Complete:**
+- Config, PostgreSQL storage (full CRUD, 12 tables, 3 migrations), OTLP receiver (gRPC + HTTP), OTEL span parser
+- `pkg/drift/` — behavioral fingerprinting + comparison scoring engine
+- `pkg/replay/` — prompt replay orchestration (baseline → agentgateway → variant capture)
+- `pkg/agwclient/` — agentgateway HTTP client (OpenAI-compatible, retry with backoff)
+- `pkg/diff/` — structural + semantic behavior diff (6-dimension scoring)
+- `pkg/api/` — HTTP API server with handlers and middleware
+- CLI: drift baseline/check/status/watch, gate check/report, demo seed/gate/migration
+- Docker/CI/Makefile, freeze-mcp (separate repo, fully built)
 
-**In progress:** Drift detection, deployment gate.
-
-**Not started:** `pkg/drift/` (fingerprinting + comparison), `pkg/replay/` (prompt replay engine), `pkg/agwclient/` (agentgateway HTTP client), `pkg/diff/` (behavior diff), drift/gate CLI commands, report generation.
+**Scaffolded (not yet implemented):** experiment, eval, ground-truth CLI commands (storage tables exist).
 
 ## Code Conventions
 
