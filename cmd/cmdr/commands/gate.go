@@ -1,12 +1,12 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"strings"
 	"text/tabwriter"
@@ -104,7 +104,7 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 	}
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := commandContext(cmd)
 
 	// Create agentgateway client
 	client := agwclient.NewClient(agwclient.ClientConfig{
@@ -124,7 +124,12 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 	cmd.Printf("Replaying baseline %s with model %s...\n", baselineTraceID, model)
 
 	engine := replay.NewEngine(store, client)
-	result, err := engine.Run(ctx, baselineTraceID, variant)
+	prepared, err := engine.Setup(ctx, baselineTraceID, variant, threshold)
+	if err != nil {
+		return fmt.Errorf("prepare replay: %w", err)
+	}
+
+	result, err := engine.Execute(ctx, prepared)
 	if err != nil {
 		return fmt.Errorf("replay failed: %w", err)
 	}
@@ -132,12 +137,12 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 	// Reload traces for diff comparison
 	baselineSteps, err := store.GetReplayTraceSpans(ctx, baselineTraceID)
 	if err != nil {
-		return fmt.Errorf("reload baseline: %w", err)
+		return failPreparedRun(engine, prepared, "reload baseline", err)
 	}
 
 	variantSteps, err := store.GetReplayTraceSpans(ctx, result.VariantTraceID)
 	if err != nil {
-		return fmt.Errorf("reload variant: %w", err)
+		return failPreparedRun(engine, prepared, "reload variant", err)
 	}
 
 	captures, err := store.GetToolCapturesByTrace(ctx, baselineTraceID)
@@ -155,7 +160,7 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 	// Persist analysis result
 	analysisResult := diff.ToAnalysisResult(report, result.ExperimentID, result.BaselineRunID, result.VariantRunID)
 	if err := store.CreateAnalysisResult(ctx, analysisResult); err != nil {
-		cmd.PrintErrf("Warning: failed to persist analysis result: %v\n", err)
+		return failPreparedRun(engine, prepared, "persist analysis", err)
 	}
 
 	// Print summary
@@ -169,8 +174,6 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 }
 
 // resolveToolComparisonInputs decides whether semantic tool dimensions can be used.
-// If baseline tool captures cannot be loaded, both sides are nil so CompareAll
-// falls back to 4-dimension structural+response scoring.
 func resolveToolComparisonInputs(
 	cmd *cobra.Command,
 	captures []*storage.ToolCapture,
@@ -185,46 +188,64 @@ func resolveToolComparisonInputs(
 	return captures, diff.ExtractVariantToolCalls(variantSteps)
 }
 
+func failPreparedRun(engine *replay.Engine, prepared *replay.PreparedRun, operation string, err error) error {
+	runErr := fmt.Errorf("%s: %w", operation, err)
+	if cleanupErr := engine.FailPreparedRun(prepared, runErr); cleanupErr != nil {
+		return fmt.Errorf("%w (cleanup: %v)", runErr, cleanupErr)
+	}
+	return runErr
+}
+
 // ErrGateFailed is returned when the gate check verdict is "fail".
-// Callers should exit with code 1 when they see this error.
 var ErrGateFailed = errors.New("gate check failed")
 
 // --- Remote execution via HTTP API ---
 
 type remoteCheckRequest struct {
-	BaselineTraceID string            `json:"baseline_trace_id"`
+	BaselineTraceID string            `json:"baselineTraceId"`
 	Model           string            `json:"model"`
 	Provider        string            `json:"provider,omitempty"`
 	Threshold       float64           `json:"threshold"`
-	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
+	RequestHeaders  map[string]string `json:"requestHeaders,omitempty"`
 }
 
 type remoteCheckResponse struct {
-	ExperimentID string `json:"experiment_id"`
+	ExperimentID string `json:"experimentId"`
 	Status       string `json:"status"`
 	Error        string `json:"error,omitempty"`
 }
 
 type remoteStatusResponse struct {
-	ExperimentID string  `json:"experiment_id"`
+	ExperimentID string  `json:"experimentId"`
 	Status       string  `json:"status"`
 	Progress     float64 `json:"progress"`
 	Error        string  `json:"error,omitempty"`
 }
 
 type remoteReportResponse struct {
-	ExperimentID    string   `json:"experiment_id"`
+	ExperimentID    string   `json:"experimentId"`
 	Status          string   `json:"status"`
-	BaselineTraceID string   `json:"baseline_trace_id"`
+	BaselineTraceID string   `json:"baselineTraceId,omitempty"`
 	Verdict         string   `json:"verdict,omitempty"`
-	SimilarityScore *float64 `json:"similarity_score,omitempty"`
-	TokenDelta      *int     `json:"token_delta,omitempty"`
-	LatencyDelta    *int     `json:"latency_delta,omitempty"`
+	SimilarityScore *float64 `json:"similarityScore,omitempty"`
+	TokenDelta      *int     `json:"tokenDelta,omitempty"`
+	LatencyDelta    *int     `json:"latencyDelta,omitempty"`
 	Error           string   `json:"error,omitempty"`
+}
+
+const remoteAPITimeout = 30 * time.Second
+
+func commandContext(cmd *cobra.Command) context.Context {
+	if ctx := cmd.Context(); ctx != nil {
+		return ctx
+	}
+	return context.Background()
 }
 
 func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, provider string, requestHeaders map[string]string, threshold float64) error {
 	serverURL := strings.TrimRight(server, "/")
+	ctx := commandContext(cmd)
+	client := &http.Client{Timeout: remoteAPITimeout}
 
 	// Submit gate check
 	reqBody := remoteCheckRequest{
@@ -241,7 +262,13 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 
 	cmd.Printf("Submitting gate check to %s...\n", server)
 
-	resp, err := http.Post(serverURL+"/api/v1/gate/check", "application/json", strings.NewReader(string(bodyBytes)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL+"/api/v1/gate/check", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("build submit request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("submit gate check: %w", err)
 	}
@@ -260,10 +287,22 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 	cmd.Printf("Experiment %s submitted, polling for results...\n", checkResp.ExperimentID)
 
 	// Poll for completion
-	for {
-		time.Sleep(2 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
 
-		statusResp, err := http.Get(serverURL + "/api/v1/gate/status/" + checkResp.ExperimentID)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+
+		statusReq, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL+"/api/v1/gate/status/"+checkResp.ExperimentID, nil)
+		if err != nil {
+			return fmt.Errorf("build status request: %w", err)
+		}
+
+		statusResp, err := client.Do(statusReq)
 		if err != nil {
 			return fmt.Errorf("poll status: %w", err)
 		}
@@ -293,12 +332,17 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 		}
 
 		// Fetch and display report
-		return fetchAndPrintRemoteReport(cmd, serverURL, checkResp.ExperimentID, model)
+		return fetchAndPrintRemoteReport(ctx, client, cmd, serverURL, checkResp.ExperimentID, model)
 	}
 }
 
-func fetchAndPrintRemoteReport(cmd *cobra.Command, serverURL, experimentID, model string) error {
-	reportResp, err := http.Get(serverURL + "/api/v1/gate/report/" + experimentID)
+func fetchAndPrintRemoteReport(ctx context.Context, client *http.Client, cmd *cobra.Command, serverURL, experimentID, model string) error {
+	reportReq, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL+"/api/v1/gate/report/"+experimentID, nil)
+	if err != nil {
+		return fmt.Errorf("build report request: %w", err)
+	}
+
+	reportResp, err := client.Do(reportReq)
 	if err != nil {
 		return fmt.Errorf("fetch report: %w", err)
 	}
@@ -358,7 +402,8 @@ func runGateReport(cmd *cobra.Command, args []string) error {
 	server, _ := cmd.Flags().GetString("server")
 	if server != "" {
 		model, _ := cmd.Flags().GetString("model")
-		return fetchAndPrintRemoteReport(cmd, strings.TrimRight(server, "/"), experimentID.String(), model)
+		client := &http.Client{Timeout: remoteAPITimeout}
+		return fetchAndPrintRemoteReport(commandContext(cmd), client, cmd, strings.TrimRight(server, "/"), experimentID.String(), model)
 	}
 
 	store, err := connectDB()
@@ -367,11 +412,14 @@ func runGateReport(cmd *cobra.Command, args []string) error {
 	}
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := commandContext(cmd)
 
 	exp, err := store.GetExperiment(ctx, experimentID)
 	if err != nil {
-		return fmt.Errorf("experiment not found: %w", err)
+		if errors.Is(err, storage.ErrExperimentNotFound) {
+			return fmt.Errorf("experiment not found: %w", err)
+		}
+		return fmt.Errorf("failed to load experiment: %w", err)
 	}
 
 	runs, err := store.ListExperimentRuns(ctx, experimentID)
@@ -416,8 +464,8 @@ func runGateReport(cmd *cobra.Command, args []string) error {
 			cmd.Printf("  Token Delta: %+d\n", r.TokenDelta)
 			cmd.Printf("  Latency Delta: %+dms\n", r.LatencyDelta)
 
-			if verdict, ok := r.BehaviorDiff["verdict"].(string); ok {
-				cmd.Printf("  Verdict: %s\n", verdictDisplay(verdict))
+			if r.BehaviorDiff.Verdict != "" {
+				cmd.Printf("  Verdict: %s\n", verdictDisplay(r.BehaviorDiff.Verdict))
 			}
 			if summary := formatFirstDivergence(r.FirstDivergence); summary != "" {
 				cmd.Printf("  First Divergence: %s\n", summary)
@@ -425,6 +473,12 @@ func runGateReport(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		cmd.Printf("\nNo analysis results found.\n")
+		for _, run := range runs {
+			if run.Status == storage.StatusFailed && run.Error != nil {
+				return fmt.Errorf("experiment failed: %s", *run.Error)
+			}
+		}
+		return fmt.Errorf("analysis results not available for experiment status=%s", exp.Status)
 	}
 
 	return nil
@@ -457,7 +511,7 @@ func printGateReport(cmd *cobra.Command, baselineTraceID, model string, experime
 		cmd.Printf("  response      %.2f  (jaccard=%.2f, length=%.2f)\n",
 			report.ResponseScore.Score, report.ResponseScore.ContentOverlap, report.ResponseScore.LengthSimilarity)
 	}
-	if summary := formatFirstDivergence(report.FirstDivergence); summary != "" {
+	if summary := formatFirstDivergence(toStructuredDivergence(report.FirstDivergence)); summary != "" {
 		cmd.Printf("\nFirst Divergence:\n")
 		cmd.Printf("  %s\n", summary)
 	}
@@ -469,78 +523,6 @@ func printGateReport(cmd *cobra.Command, baselineTraceID, model string, experime
 
 	cmd.Printf("\nTotals: token_delta=%+d  latency_delta=%+dms\n", report.TokenDelta, report.LatencyDelta)
 	cmd.Printf("Experiment: %s\n", experimentID)
-}
-
-func formatFirstDivergence(divergence storage.JSONB) string {
-	if len(divergence) == 0 {
-		return ""
-	}
-
-	switch divergenceType, _ := divergence["type"].(string); divergenceType {
-	case "tool_sequence":
-		toolIndex, _ := intValue(divergence["tool_index"])
-		baseline, _ := divergence["baseline"].(string)
-		variant, _ := divergence["variant"].(string)
-		return fmt.Sprintf("tool #%d changed: baseline=%q variant=%q", toolIndex, baseline, variant)
-	case "tool_count":
-		toolIndex, _ := intValue(divergence["tool_index"])
-		baselineCount, _ := intValue(divergence["baseline_count"])
-		variantCount, _ := intValue(divergence["variant_count"])
-		return fmt.Sprintf("tool count diverged at tool #%d: baseline=%d variant=%d", toolIndex, baselineCount, variantCount)
-	case "response_content":
-		stepIndex, _ := intValue(divergence["step_index"])
-		jaccard, _ := floatValue(divergence["jaccard"])
-		baselineExcerpt, _ := divergence["baseline_excerpt"].(string)
-		variantExcerpt, _ := divergence["variant_excerpt"].(string)
-		if baselineExcerpt == "" {
-			baselineExcerpt = "(no excerpt)"
-		}
-		if variantExcerpt == "" {
-			variantExcerpt = "(no excerpt)"
-		}
-		return fmt.Sprintf("step %d response changed (jaccard=%.2f): baseline=%q variant=%q", stepIndex, jaccard, baselineExcerpt, variantExcerpt)
-	case "step_count":
-		stepIndex, _ := intValue(divergence["step_index"])
-		baselineSteps, _ := intValue(divergence["baseline_steps"])
-		variantSteps, _ := intValue(divergence["variant_steps"])
-		return fmt.Sprintf("step count diverged at step %d: baseline=%d variant=%d", stepIndex, baselineSteps, variantSteps)
-	default:
-		return fmt.Sprintf("%v", divergence)
-	}
-}
-
-func intValue(v interface{}) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int32:
-		return int(n), true
-	case int64:
-		return int(n), true
-	case float32:
-		return int(math.Round(float64(n))), true
-	case float64:
-		return int(math.Round(n)), true
-	default:
-		return 0, false
-	}
-}
-
-func floatValue(v interface{}) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case int32:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	default:
-		return 0, false
-	}
 }
 
 func buildReplayHeaders(freezeTraceID string, headerSpecs []string) (map[string]string, error) {

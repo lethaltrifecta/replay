@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spf13/cobra"
 
@@ -68,6 +69,105 @@ func runDemoSeed(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("mark baseline: %w", err)
 	}
 	cmd.Println("Baseline set for demo-baseline-001")
+
+	// Seed Drift Result
+	driftResult := &storage.DriftResult{
+		TraceID:         "demo-drifted-002",
+		BaselineTraceID: "demo-baseline-001",
+		DriftScore:      0.62,
+		Verdict:         storage.DriftVerdictFail,
+		Details: storage.DriftDetails{
+			Reason:         "Destructive tool call detected: delete_database",
+			DivergenceStep: 3,
+			RiskEscalation: true,
+		},
+	}
+	if err := store.CreateDriftResult(ctx, driftResult); err != nil {
+		return fmt.Errorf("seed drift result: %w", err)
+	}
+	cmd.Println("Seeded drift result for demo-drifted-002")
+
+	// Seed Gate Experiment
+	expID := uuid.New()
+	completedAt := time.Now()
+	threshold := 0.8
+	exp := &storage.Experiment{
+		ID:              expID,
+		Name:            "Auth Migration Gate Check",
+		BaselineTraceID: "demo-baseline-001",
+		Status:          storage.StatusCompleted,
+		Progress:        1.0,
+		Config: storage.ExperimentConfig{
+			Model:     "claude-3-5-sonnet-20241022",
+			Provider:  "anthropic",
+			Threshold: &threshold,
+		},
+		CreatedAt:   time.Now().Add(-10 * time.Minute),
+		CompletedAt: &completedAt,
+	}
+	if err := store.CreateExperiment(ctx, exp); err != nil {
+		return fmt.Errorf("seed experiment: %w", err)
+	}
+
+	baseRunID := uuid.New()
+	variantRunID := uuid.New()
+	trace2 := "demo-drifted-002"
+
+	runs := []*storage.ExperimentRun{
+		{
+			ID:            baseRunID,
+			ExperimentID:  expID,
+			RunType:       storage.RunTypeBaseline,
+			TraceID:       &exp.BaselineTraceID,
+			VariantConfig: storage.VariantConfig{},
+			Status:        storage.StatusCompleted,
+			CreatedAt:     exp.CreatedAt,
+			CompletedAt:   &completedAt,
+		},
+		{
+			ID:            variantRunID,
+			ExperimentID:  expID,
+			RunType:       storage.RunTypeVariant,
+			TraceID:       &trace2,
+			VariantConfig: exp.Config.ToVariantConfig(),
+			Status:        storage.StatusCompleted,
+			CreatedAt:     exp.CreatedAt,
+			CompletedAt:   &completedAt,
+		},
+	}
+	for _, r := range runs {
+		if err := store.CreateExperimentRun(ctx, r); err != nil {
+			return fmt.Errorf("seed run: %w", err)
+		}
+	}
+
+	analysis := &storage.AnalysisResult{
+		ExperimentID:    expID,
+		BaselineRunID:   baseRunID,
+		CandidateRunID:  variantRunID,
+		SimilarityScore: 0.62,
+		BehaviorDiff: storage.BehaviorDiff{
+			Verdict: "fail",
+			Reason:  "Behavioral drift exceeds threshold (0.8)",
+		},
+		FirstDivergence: storage.FirstDivergence{
+			StepIndex: 3,
+			Type:      "tool_mismatch",
+			Baseline:  "edit_file",
+			Variant:   "delete_database",
+		},
+		SafetyDiff: storage.SafetyDiff{
+			RiskEscalation: true,
+			BaselineRisk:   "write",
+			VariantRisk:    "destructive",
+		},
+		TokenDelta:   450,
+		LatencyDelta: -120,
+	}
+	if err := store.CreateAnalysisResult(ctx, analysis); err != nil {
+		return fmt.Errorf("seed analysis: %w", err)
+	}
+	cmd.Printf("Seeded experiment %s with failed gate result\n", expID)
 
 	return nil
 }

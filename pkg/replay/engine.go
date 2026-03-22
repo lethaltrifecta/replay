@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,8 +64,8 @@ func NewEngine(store storage.Storage, client Completer) *Engine {
 // Run replays every step from baselineTraceID using the variant config.
 // It creates Experiment and ExperimentRun records, and persists each variant ReplayTrace.
 // This is the synchronous all-in-one entry point (calls Setup then Execute).
-func (e *Engine) Run(ctx context.Context, baselineTraceID string, variant VariantConfig) (*Result, error) {
-	prepared, err := e.Setup(ctx, baselineTraceID, variant)
+func (e *Engine) Run(ctx context.Context, baselineTraceID string, variant VariantConfig, threshold float64) (*Result, error) {
+	prepared, err := e.Setup(ctx, baselineTraceID, variant, threshold)
 	if err != nil {
 		return nil, err
 	}
@@ -74,14 +75,14 @@ func (e *Engine) Run(ctx context.Context, baselineTraceID string, variant Varian
 // Setup loads the baseline, creates Experiment + ExperimentRun records, and returns
 // a PreparedRun that can be passed to Execute. This is the synchronous first phase
 // that produces an experiment ID before the (potentially long-running) replay loop.
-func (e *Engine) Setup(ctx context.Context, baselineTraceID string, variant VariantConfig) (*PreparedRun, error) {
+func (e *Engine) Setup(ctx context.Context, baselineTraceID string, variant VariantConfig, threshold float64) (*PreparedRun, error) {
 	// Load baseline steps
 	baselineSteps, err := e.store.GetReplayTraceSpans(ctx, baselineTraceID)
 	if err != nil {
 		return nil, fmt.Errorf("load baseline: %w", err)
 	}
 	if len(baselineSteps) == 0 {
-		return nil, fmt.Errorf("no replay traces found for baseline %s", baselineTraceID)
+		return nil, storage.ErrTraceNotFound
 	}
 
 	// Create experiment
@@ -93,9 +94,14 @@ func (e *Engine) Setup(ctx context.Context, baselineTraceID string, variant Vari
 		BaselineTraceID: baselineTraceID,
 		Status:          storage.StatusRunning,
 		Progress:        0,
-		Config: storage.JSONB{
-			"variant_model":    variant.Model,
-			"variant_provider": variant.Provider,
+		Config: storage.ExperimentConfig{
+			Model:          variant.Model,
+			Provider:       variant.Provider,
+			Temperature:    variant.Temperature,
+			TopP:           variant.TopP,
+			MaxTokens:      variant.MaxTokens,
+			RequestHeaders: maps.Clone(variant.RequestHeaders),
+			Threshold:      &threshold,
 		},
 		CreatedAt: now,
 	}
@@ -109,7 +115,7 @@ func (e *Engine) Setup(ctx context.Context, baselineTraceID string, variant Vari
 		ID:            baselineRunID,
 		ExperimentID:  experimentID,
 		RunType:       storage.RunTypeBaseline,
-		VariantConfig: storage.JSONB{}, // NOT NULL in schema; baseline has no variant config
+		VariantConfig: storage.VariantConfig{}, // structured default
 		TraceID:       &baselineTraceID,
 		Status:        storage.StatusCompleted,
 		CreatedAt:     now,
@@ -124,20 +130,20 @@ func (e *Engine) Setup(ctx context.Context, baselineTraceID string, variant Vari
 
 	// Create variant run (running)
 	variantRunID := uuid.New()
-	variantConfig := storage.JSONB{
-		"model":    variant.Model,
-		"provider": variant.Provider,
-	}
-	if len(variant.RequestHeaders) > 0 {
-		variantConfig["request_headers"] = variant.RequestHeaders
-	}
 	variantRun := &storage.ExperimentRun{
-		ID:            variantRunID,
-		ExperimentID:  experimentID,
-		RunType:       storage.RunTypeVariant,
-		VariantConfig: variantConfig,
-		Status:        storage.StatusRunning,
-		CreatedAt:     now,
+		ID:           variantRunID,
+		ExperimentID: experimentID,
+		RunType:      storage.RunTypeVariant,
+		VariantConfig: storage.VariantConfig{
+			Model:          variant.Model,
+			Provider:       variant.Provider,
+			Temperature:    variant.Temperature,
+			TopP:           variant.TopP,
+			MaxTokens:      variant.MaxTokens,
+			RequestHeaders: variant.RequestHeaders,
+		},
+		Status:    storage.StatusRunning,
+		CreatedAt: now,
 	}
 	if err := e.store.CreateExperimentRun(ctx, variantRun); err != nil {
 		if cleanupErr := e.markExperimentFailed(exp); cleanupErr != nil {
@@ -436,6 +442,15 @@ func (e *Engine) failExperiment(exp *storage.Experiment, run *storage.Experiment
 		return errors.Join(errs...)
 	}
 	return nil
+}
+
+// FailPreparedRun marks the prepared variant run and experiment as failed.
+// This is used by callers when post-replay pipeline steps fail after Execute returns.
+func (e *Engine) FailPreparedRun(prepared *PreparedRun, runErr error) error {
+	if prepared == nil || prepared.Experiment == nil || prepared.VariantRun == nil {
+		return fmt.Errorf("prepared run is incomplete")
+	}
+	return e.failExperiment(prepared.Experiment, prepared.VariantRun, runErr)
 }
 
 // markExperimentFailed marks only the experiment as failed (used when run creation itself fails).

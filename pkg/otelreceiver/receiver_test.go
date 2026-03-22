@@ -54,6 +54,9 @@ func (m *mockStorage) GetReplayTraceSpans(ctx context.Context, traceID string) (
 func (m *mockStorage) ListReplayTraces(ctx context.Context, filters storage.TraceFilters) ([]*storage.ReplayTrace, error) {
 	return nil, nil
 }
+func (m *mockStorage) ListUniqueTraces(ctx context.Context, filters storage.TraceFilters) ([]*storage.TraceSummary, error) {
+	return nil, nil
+}
 func (m *mockStorage) GetToolCapturesByTrace(ctx context.Context, traceID string) ([]*storage.ToolCapture, error) {
 	return nil, nil
 }
@@ -174,7 +177,10 @@ func (m *mockStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTra
 func (m *mockStorage) GetLatestDriftResult(ctx context.Context, traceID string) (*storage.DriftResult, error) {
 	return nil, nil
 }
-func (m *mockStorage) ListDriftResults(ctx context.Context, limit int) ([]*storage.DriftResult, error) {
+func (m *mockStorage) GetDriftResultForPair(ctx context.Context, traceID string, baselineTraceID string) (*storage.DriftResult, error) {
+	return nil, nil
+}
+func (m *mockStorage) ListDriftResults(ctx context.Context, limit int, offset int) ([]*storage.DriftResult, error) {
 	return nil, nil
 }
 func (m *mockStorage) HasDriftResultForBaseline(ctx context.Context, traceID string, baselineTraceID string) (bool, error) {

@@ -48,15 +48,13 @@ func NewServer(cfg ServerConfig, store storage.Storage, completer replay.Complet
 		cancel:    cancel,
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/v1/gate/check", s.handleGateCheck)
-	mux.HandleFunc("GET /api/v1/gate/status/{id}", s.handleGateStatus)
-	mux.HandleFunc("GET /api/v1/gate/report/{id}", s.handleGateReport)
-	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	h := HandlerWithOptions(s, StdHTTPServerOptions{
+		BaseURL: "/api/v1",
+	})
 
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: mux,
+		Handler: h,
 	}
 
 	return s

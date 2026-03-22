@@ -1,0 +1,733 @@
+openapi: 3.0.3
+info:
+  title: Replay Governance API
+  description: API for agent governance, baseline approval, and drift monitoring.
+  version: 1.0.0
+
+servers:
+  - url: /api/v1
+    description: V1 API
+
+tags:
+  - name: Governance
+    description: Baseline and Drift management
+  - name: Experiments
+    description: Gate runs and evaluation
+  - name: Traces
+    description: Trace browsing and comparison
+  - name: System
+    description: System health and metadata
+
+paths:
+  /baselines:
+    get:
+      tags: [Governance]
+      summary: List all approved baselines
+      operationId: listBaselines
+      responses:
+        '200':
+          description: A list of baselines
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Baseline'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /baselines/{traceId}:
+    post:
+      tags: [Governance]
+      summary: Mark a trace as a baseline
+      operationId: createBaseline
+      parameters:
+        - name: traceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Baseline created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Baseline'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Governance]
+      summary: Unmark a trace as baseline
+      operationId: deleteBaseline
+      parameters:
+        - name: traceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Baseline removed
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /drift-results:
+    get:
+      tags: [Governance]
+      summary: List drift results (Drift Inbox)
+      operationId: listDriftResults
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: A list of drift results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DriftResult'
+
+  /drift-results/{traceId}:
+    get:
+      tags: [Governance]
+      summary: Get drift details for a specific trace
+      operationId: getDriftResult
+      parameters:
+        - name: traceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: baselineTraceId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Drift result detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriftResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /experiments:
+    get:
+      tags: [Experiments]
+      summary: List experiments (Gate Runs)
+      operationId: listExperiments
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, running, completed, failed, cancelled]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of experiments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Experiment'
+
+  /experiments/{id}:
+    get:
+      tags: [Experiments]
+      summary: Get experiment details
+      operationId: getExperiment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExperimentDetail'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /experiments/{id}/report:
+    get:
+      tags: [Experiments]
+      summary: Get full gate report for an experiment
+      operationId: getExperimentReport
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExperimentReport'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /traces:
+    get:
+      tags: [Traces]
+      summary: List replayed traces
+      operationId: listTraces
+      parameters:
+        - name: model
+          in: query
+          schema:
+            type: string
+        - name: provider
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TraceSummary'
+
+  /traces/{traceId}:
+    get:
+      tags: [Traces]
+      summary: Get trace details (steps)
+      operationId: getTrace
+      parameters:
+        - name: traceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceDetail'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /compare/{baselineTraceId}/{candidateTraceId}:
+    get:
+      tags: [Traces]
+      summary: Side-by-side trace comparison
+      operationId: compareTraces
+      parameters:
+        - name: baselineTraceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: candidateTraceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceComparison'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /gate/check:
+    post:
+      tags: [Experiments]
+      summary: Start a deployment gate check
+      operationId: createGateCheck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GateCheckRequest'
+      responses:
+        '202':
+          description: Gate check started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GateCheckResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '503':
+          description: Service unavailable (at capacity)
+
+  /gate/status/{id}:
+    get:
+      tags: [Experiments]
+      summary: Get status of a gate check
+      operationId: getGateStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GateStatusResponse'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /gate/report/{id}:
+    get:
+      tags: [Experiments]
+      summary: Get full report of a gate check
+      operationId: getGateReport
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExperimentReport'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      operationId: getHealth
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, degraded]
+
+components:
+  responses:
+    Error:
+      description: Generic error response
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: string
+              code:
+                type: string
+
+  schemas:
+    GateCheckRequest:
+      type: object
+      required: [baselineTraceId, model]
+      properties:
+        baselineTraceId:
+          type: string
+        model:
+          type: string
+        provider:
+          type: string
+        threshold:
+          type: number
+          format: float
+          default: 0.8
+          minimum: 0
+          maximum: 1
+        temperature:
+          type: number
+          format: float
+        topP:
+          type: number
+          format: float
+        maxTokens:
+          type: integer
+        requestHeaders:
+          type: object
+          additionalProperties:
+            type: string
+
+    GateCheckResponse:
+      type: object
+      properties:
+        experimentId:
+          type: string
+          format: uuid
+        status:
+          type: string
+
+    GateStatusResponse:
+      type: object
+      properties:
+        experimentId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        progress:
+          type: number
+          format: float
+
+    Baseline:
+      type: object
+      properties:
+        traceId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    DriftResult:
+      type: object
+      properties:
+        traceId:
+          type: string
+        baselineTraceId:
+          type: string
+        driftScore:
+          type: number
+          format: float
+        verdict:
+          type: string
+          enum: [pass, warn, fail, pending]
+        details:
+          $ref: '#/components/schemas/DriftDetails'
+        createdAt:
+          type: string
+          format: date-time
+
+    DriftDetails:
+      type: object
+      properties:
+        reason:
+          type: string
+        divergence_step:
+          type: integer
+        risk_escalation:
+          type: boolean
+
+    VariantConfig:
+      type: object
+      properties:
+        model:
+          type: string
+        provider:
+          type: string
+        temperature:
+          type: number
+          format: float
+        topP:
+          type: number
+          format: float
+        maxTokens:
+          type: integer
+        requestHeaders:
+          type: object
+          additionalProperties:
+            type: string
+
+    Experiment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        baselineTraceId:
+          type: string
+        status:
+          type: string
+        progress:
+          type: number
+          format: float
+        threshold:
+          type: number
+          format: float
+        verdict:
+          type: string
+        variantConfig:
+          $ref: '#/components/schemas/VariantConfig'
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+
+    ExperimentDetail:
+      allOf:
+        - $ref: '#/components/schemas/Experiment'
+        - type: object
+          properties:
+            runs:
+              type: array
+              items:
+                $ref: '#/components/schemas/ExperimentRun'
+
+    ExperimentRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        runType:
+          type: string
+          enum: [baseline, variant]
+        traceId:
+          type: string
+        status:
+          type: string
+        error:
+          type: string
+        variantConfig:
+          $ref: '#/components/schemas/VariantConfig'
+        createdAt:
+          type: string
+          format: date-time
+
+    ExperimentReport:
+      type: object
+      properties:
+        experimentId:
+          type: string
+          format: uuid
+        baselineTraceId:
+          type: string
+        status:
+          type: string
+        verdict:
+          type: string
+        similarityScore:
+          type: number
+          format: float
+        tokenDelta:
+          type: integer
+        latencyDelta:
+          type: integer
+        analysis:
+          $ref: '#/components/schemas/AnalysisResult'
+        error:
+          type: string
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExperimentRun'
+
+    AnalysisResult:
+      type: object
+      properties:
+        behavior_diff:
+          $ref: '#/components/schemas/BehaviorDiff'
+        first_divergence:
+          $ref: '#/components/schemas/FirstDivergence'
+        safety_diff:
+          $ref: '#/components/schemas/SafetyDiff'
+
+    BehaviorDiff:
+      type: object
+      properties:
+        verdict:
+          type: string
+        reason:
+          type: string
+
+    FirstDivergence:
+      type: object
+      properties:
+        step_index:
+          type: integer
+        type:
+          type: string
+        baseline:
+          type: string
+        variant:
+          type: string
+
+    SafetyDiff:
+      type: object
+      properties:
+        risk_escalation:
+          type: boolean
+        baseline_risk:
+          type: string
+        variant_risk:
+          type: string
+
+    TraceSummary:
+      type: object
+      properties:
+        traceId:
+          type: string
+        models:
+          type: array
+          items:
+            type: string
+        providers:
+          type: array
+          items:
+            type: string
+        stepCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+
+    PromptMessage:
+      type: object
+      properties:
+        role:
+          type: string
+        content:
+          type: string
+
+    PromptContent:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/PromptMessage'
+
+    TraceStep:
+      type: object
+      properties:
+        spanId:
+          type: string
+        stepIndex:
+          type: integer
+        provider:
+          type: string
+        model:
+          type: string
+        prompt:
+          $ref: '#/components/schemas/PromptContent'
+        completion:
+          type: string
+        promptTokens:
+          type: integer
+        completionTokens:
+          type: integer
+        latencyMs:
+          type: integer
+
+    TraceDetail:
+      type: object
+      properties:
+        traceId:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/TraceStep'
+        toolCaptures:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolCapture'
+
+    ToolCapture:
+      type: object
+      properties:
+        toolName:
+          type: string
+        args:
+          type: object
+          additionalProperties: true
+        result:
+          type: object
+          additionalProperties: true
+        riskClass:
+          type: string
+          enum: [read, write, destructive]
+        latencyMs:
+          type: integer
+
+    TraceComparison:
+      type: object
+      properties:
+        baseline:
+          $ref: '#/components/schemas/TraceDetail'
+        candidate:
+          $ref: '#/components/schemas/TraceDetail'
+        diff:
+          type: object
+          properties:
+            divergenceReason:
+              type: string
+            divergenceStepIndex:
+              type: integer
+            similarityScore:
+              type: number
+              format: float

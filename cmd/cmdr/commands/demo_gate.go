@@ -49,7 +49,7 @@ func runDemoGate(cmd *cobra.Command, args []string) error {
 	}
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := commandContext(cmd)
 
 	variant := replay.VariantConfig{
 		Model: model,
@@ -58,7 +58,12 @@ func runDemoGate(cmd *cobra.Command, args []string) error {
 	cmd.Printf("Replaying baseline %s with model %s...\n", baselineTraceID, model)
 
 	engine := replay.NewEngine(store, completer)
-	result, err := engine.Run(ctx, baselineTraceID, variant)
+	prepared, err := engine.Setup(ctx, baselineTraceID, variant, threshold)
+	if err != nil {
+		return fmt.Errorf("prepare replay: %w", err)
+	}
+
+	result, err := engine.Execute(ctx, prepared)
 	if err != nil {
 		return fmt.Errorf("replay failed: %w", err)
 	}
@@ -66,12 +71,12 @@ func runDemoGate(cmd *cobra.Command, args []string) error {
 	// Reload traces for diff comparison
 	baselineSteps, err := store.GetReplayTraceSpans(ctx, baselineTraceID)
 	if err != nil {
-		return fmt.Errorf("reload baseline: %w", err)
+		return failPreparedRun(engine, prepared, "reload baseline", err)
 	}
 
 	variantSteps, err := store.GetReplayTraceSpans(ctx, result.VariantTraceID)
 	if err != nil {
-		return fmt.Errorf("reload variant: %w", err)
+		return failPreparedRun(engine, prepared, "reload variant", err)
 	}
 
 	captures, err := store.GetToolCapturesByTrace(ctx, baselineTraceID)
@@ -89,7 +94,7 @@ func runDemoGate(cmd *cobra.Command, args []string) error {
 	// Persist analysis result
 	analysisResult := diff.ToAnalysisResult(report, result.ExperimentID, result.BaselineRunID, result.VariantRunID)
 	if err := store.CreateAnalysisResult(ctx, analysisResult); err != nil {
-		cmd.PrintErrf("Warning: failed to persist analysis result: %v\n", err)
+		return failPreparedRun(engine, prepared, "persist analysis", err)
 	}
 
 	printColoredGateReport(cmd, baselineTraceID, model, result.ExperimentID, report, threshold)

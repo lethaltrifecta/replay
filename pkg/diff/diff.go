@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -334,20 +335,15 @@ func excerpt(s string, maxLen int) string {
 
 // ToAnalysisResult maps a Report into a storage.AnalysisResult for persistence.
 func ToAnalysisResult(report *Report, experimentID, baselineRunID, candidateRunID uuid.UUID) *storage.AnalysisResult {
-	behaviorDiff := storage.JSONB{
-		"step_count":       report.StepCount,
-		"step_diffs":       report.StepDiffs,
-		"verdict":          report.Verdict,
-		"similarity_score": report.SimilarityScore,
+	behaviorDiff := storage.BehaviorDiff{
+		Verdict: report.Verdict,
+		Reason:  fmt.Sprintf("Score: %.2f", report.SimilarityScore),
 	}
 
-	safetyDiff := storage.JSONB{}
+	var safetyDiff storage.SafetyDiff
 	if report.RiskScore != nil {
-		safetyDiff = storage.JSONB{
-			"score":      report.RiskScore.Score,
-			"escalation": report.RiskScore.Escalation,
-			"details":    report.RiskScore.Details,
-		}
+		safetyDiff.RiskEscalation = report.RiskScore.Escalation
+		// Map other fields if possible, or use defaults
 	}
 
 	qualityMetrics := storage.JSONB{}
@@ -362,9 +358,20 @@ func ToAnalysisResult(report *Report, experimentID, baselineRunID, candidateRunI
 		qualityMetrics["tool_call_score"] = report.ToolCallScore.Score
 	}
 
-	firstDivergence := storage.JSONB{}
-	if report.FirstDivergence != nil && len(report.FirstDivergence) > 0 {
-		firstDivergence = report.FirstDivergence
+	var firstDivergence storage.FirstDivergence
+	if report.FirstDivergence != nil {
+		if idx, ok := report.FirstDivergence["step_index"].(float64); ok {
+			firstDivergence.StepIndex = int(idx)
+		}
+		if t, ok := report.FirstDivergence["type"].(string); ok {
+			firstDivergence.Type = t
+		}
+		if b, ok := report.FirstDivergence["baseline"].(string); ok {
+			firstDivergence.Baseline = b
+		}
+		if v, ok := report.FirstDivergence["variant"].(string); ok {
+			firstDivergence.Variant = v
+		}
 	}
 
 	return &storage.AnalysisResult{

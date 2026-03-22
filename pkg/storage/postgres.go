@@ -59,39 +59,16 @@ func (s *PostgresStorage) Ping(ctx context.Context) error {
 
 // Migrate runs database migrations
 func (s *PostgresStorage) Migrate(ctx context.Context) error {
-	// Read and execute first migration
-	migrationSQL, err := migrationsFS.ReadFile("migrations/001_initial_schema.sql")
-	if err != nil {
-		return fmt.Errorf("failed to read migration file: %w", err)
+	// Read and execute migrations sequentially
+	for _, name := range []string{"001_initial_schema.sql", "002_baselines_and_drift.sql", "003_drift_unique_constraint.sql"} {
+		sql, err := migrationsFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return fmt.Errorf("failed to read migration %s: %w", name, err)
+		}
+		if _, err = s.pool.Exec(ctx, string(sql)); err != nil {
+			return fmt.Errorf("failed to execute migration %s: %w", name, err)
+		}
 	}
-
-	_, err = s.pool.Exec(ctx, string(migrationSQL))
-	if err != nil {
-		return fmt.Errorf("failed to execute migration 001: %w", err)
-	}
-
-	// Read and execute baselines + drift migration
-	migrationSQL2, err := migrationsFS.ReadFile("migrations/002_baselines_and_drift.sql")
-	if err != nil {
-		return fmt.Errorf("failed to read migration file 002: %w", err)
-	}
-
-	_, err = s.pool.Exec(ctx, string(migrationSQL2))
-	if err != nil {
-		return fmt.Errorf("failed to execute migration 002: %w", err)
-	}
-
-	// Dedup existing drift_results rows and add unique constraint
-	migrationSQL3, err := migrationsFS.ReadFile("migrations/003_drift_unique_constraint.sql")
-	if err != nil {
-		return fmt.Errorf("failed to read migration file 003: %w", err)
-	}
-
-	_, err = s.pool.Exec(ctx, string(migrationSQL3))
-	if err != nil {
-		return fmt.Errorf("failed to execute migration 003: %w", err)
-	}
-
 	return nil
 }
 
@@ -111,7 +88,6 @@ func (s *PostgresStorage) CreateOTELTrace(ctx context.Context, trace *OTELTrace)
 		trace.StartTime, trace.EndTime, trace.Attributes, trace.Events, trace.Status, trace.CreatedAt,
 	).Scan(&trace.ID)
 
-	// ON CONFLICT DO NOTHING returns no rows — treat as success
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -168,15 +144,85 @@ func (s *PostgresStorage) CreateReplayTrace(ctx context.Context, trace *ReplayTr
 		trace.TotalTokens, trace.LatencyMS, trace.Metadata,
 	).Scan(&trace.ID)
 
-	// ON CONFLICT DO NOTHING returns no rows — treat as success
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	return err
 }
 
-// GetReplayTraceSpans retrieves all LLM calls (spans) for a trace ID,
-// ordered by step_index to reconstruct the agent conversation flow.
+// ListUniqueTraces returns a list of unique traces with aggregated metadata.
+func (s *PostgresStorage) ListUniqueTraces(ctx context.Context, filters TraceFilters) ([]*TraceSummary, error) {
+	query := `
+		WITH matching_traces AS (
+			SELECT DISTINCT trace_id
+			FROM replay_traces
+			WHERE 1=1
+	`
+	args := []interface{}{}
+	argNum := 1
+
+	if filters.Model != nil {
+		query += fmt.Sprintf(" AND model = $%d", argNum)
+		args = append(args, *filters.Model)
+		argNum++
+	}
+
+	if filters.Provider != nil {
+		query += fmt.Sprintf(" AND provider = $%d", argNum)
+		args = append(args, *filters.Provider)
+		argNum++
+	}
+
+	query += `
+		)
+		SELECT
+			rt.trace_id,
+			COALESCE(array_agg(DISTINCT rt.model ORDER BY rt.model) FILTER (WHERE rt.model <> ''), ARRAY[]::text[]) AS models,
+			COALESCE(array_agg(DISTINCT rt.provider ORDER BY rt.provider) FILTER (WHERE rt.provider <> ''), ARRAY[]::text[]) AS providers,
+			COUNT(*) AS step_count,
+			MIN(rt.created_at) AS created_at
+		FROM replay_traces rt
+		INNER JOIN matching_traces mt ON mt.trace_id = rt.trace_id
+		GROUP BY rt.trace_id
+	`
+
+	if filters.SortAsc {
+		query += " ORDER BY created_at ASC, trace_id ASC"
+	} else {
+		query += " ORDER BY created_at DESC, trace_id DESC"
+	}
+
+	if filters.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argNum)
+		args = append(args, filters.Limit)
+		argNum++
+	}
+
+	if filters.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", argNum)
+		args = append(args, filters.Offset)
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var traces []*TraceSummary
+	for rows.Next() {
+		var t TraceSummary
+		err := rows.Scan(&t.TraceID, &t.Models, &t.Providers, &t.StepCount, &t.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		traces = append(traces, &t)
+	}
+
+	return traces, rows.Err()
+}
+
+// GetReplayTraceSpans retrieves all LLM calls (spans) for a trace ID.
 func (s *PostgresStorage) GetReplayTraceSpans(ctx context.Context, traceID string) ([]*ReplayTrace, error) {
 	query := `
 		SELECT id, trace_id, span_id, run_id, step_index, created_at, provider, model, prompt, completion,
@@ -210,7 +256,7 @@ func (s *PostgresStorage) GetReplayTraceSpans(ctx context.Context, traceID strin
 	return traces, rows.Err()
 }
 
-// ListReplayTraces lists replay traces with filters
+// ListReplayTraces lists replay traces with filters.
 func (s *PostgresStorage) ListReplayTraces(ctx context.Context, filters TraceFilters) ([]*ReplayTrace, error) {
 	query := `
 		SELECT id, trace_id, span_id, run_id, step_index, created_at, provider, model, prompt, completion,
@@ -286,7 +332,7 @@ func (s *PostgresStorage) ListReplayTraces(ctx context.Context, filters TraceFil
 	return traces, rows.Err()
 }
 
-// CreateToolCapture creates a new tool capture record
+// CreateToolCapture creates a new tool capture record.
 func (s *PostgresStorage) CreateToolCapture(ctx context.Context, capture *ToolCapture) error {
 	query := `
 		INSERT INTO tool_captures (
@@ -302,7 +348,7 @@ func (s *PostgresStorage) CreateToolCapture(ctx context.Context, capture *ToolCa
 	).Scan(&capture.ID)
 }
 
-// GetToolCapturesByTrace retrieves all tool captures for a trace
+// GetToolCapturesByTrace retrieves all tool captures for a trace.
 func (s *PostgresStorage) GetToolCapturesByTrace(ctx context.Context, traceID string) ([]*ToolCapture, error) {
 	query := `
 		SELECT id, trace_id, span_id, step_index, tool_name, args, args_hash, result, error,
@@ -336,7 +382,6 @@ func (s *PostgresStorage) GetToolCapturesByTrace(ctx context.Context, traceID st
 }
 
 // GetToolCaptureByArgs retrieves a tool capture by tool name and args hash.
-// Used by Freeze-Tools in freeze mode to look up pre-recorded results.
 func (s *PostgresStorage) GetToolCaptureByArgs(ctx context.Context, toolName string, argsHash string) (*ToolCapture, error) {
 	query := `
 		SELECT id, trace_id, span_id, step_index, tool_name, args, args_hash, result, error,
@@ -355,7 +400,7 @@ func (s *PostgresStorage) GetToolCaptureByArgs(ctx context.Context, toolName str
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("tool capture not found: %s/%s", toolName, argsHash)
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -364,7 +409,7 @@ func (s *PostgresStorage) GetToolCaptureByArgs(ctx context.Context, toolName str
 	return &capture, nil
 }
 
-// CreateExperiment creates a new experiment
+// CreateExperiment creates a new experiment.
 func (s *PostgresStorage) CreateExperiment(ctx context.Context, exp *Experiment) error {
 	query := `
 		INSERT INTO experiments (
@@ -379,7 +424,7 @@ func (s *PostgresStorage) CreateExperiment(ctx context.Context, exp *Experiment)
 	return err
 }
 
-// GetExperiment retrieves an experiment by ID
+// GetExperiment retrieves an experiment by ID.
 func (s *PostgresStorage) GetExperiment(ctx context.Context, id uuid.UUID) (*Experiment, error) {
 	query := `
 		SELECT id, name, baseline_trace_id, status, progress, config, created_at, completed_at
@@ -394,7 +439,7 @@ func (s *PostgresStorage) GetExperiment(ctx context.Context, id uuid.UUID) (*Exp
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("experiment not found: %s", id)
+		return nil, ErrExperimentNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -403,7 +448,7 @@ func (s *PostgresStorage) GetExperiment(ctx context.Context, id uuid.UUID) (*Exp
 	return &exp, nil
 }
 
-// UpdateExperiment updates an experiment
+// UpdateExperiment updates an experiment.
 func (s *PostgresStorage) UpdateExperiment(ctx context.Context, exp *Experiment) error {
 	query := `
 		UPDATE experiments
@@ -415,7 +460,7 @@ func (s *PostgresStorage) UpdateExperiment(ctx context.Context, exp *Experiment)
 	return err
 }
 
-// ListExperiments lists experiments with filters
+// ListExperiments lists experiments with filters.
 func (s *PostgresStorage) ListExperiments(ctx context.Context, filters ExperimentFilters) ([]*Experiment, error) {
 	query := `
 		SELECT id, name, baseline_trace_id, status, progress, config, created_at, completed_at
@@ -478,7 +523,7 @@ func (s *PostgresStorage) ListExperiments(ctx context.Context, filters Experimen
 	return experiments, rows.Err()
 }
 
-// CreateExperimentRun creates a new experiment run
+// CreateExperimentRun creates a new experiment run.
 func (s *PostgresStorage) CreateExperimentRun(ctx context.Context, run *ExperimentRun) error {
 	query := `
 		INSERT INTO experiment_runs (
@@ -494,7 +539,7 @@ func (s *PostgresStorage) CreateExperimentRun(ctx context.Context, run *Experime
 	return err
 }
 
-// GetExperimentRun retrieves an experiment run by ID
+// GetExperimentRun retrieves an experiment run by ID.
 func (s *PostgresStorage) GetExperimentRun(ctx context.Context, id uuid.UUID) (*ExperimentRun, error) {
 	query := `
 		SELECT id, experiment_id, run_type, variant_config, trace_id, status, error, created_at, completed_at
@@ -509,7 +554,7 @@ func (s *PostgresStorage) GetExperimentRun(ctx context.Context, id uuid.UUID) (*
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("experiment run not found: %s", id)
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -518,7 +563,7 @@ func (s *PostgresStorage) GetExperimentRun(ctx context.Context, id uuid.UUID) (*
 	return &run, nil
 }
 
-// UpdateExperimentRun updates an experiment run
+// UpdateExperimentRun updates an experiment run.
 func (s *PostgresStorage) UpdateExperimentRun(ctx context.Context, run *ExperimentRun) error {
 	query := `
 		UPDATE experiment_runs
@@ -530,7 +575,7 @@ func (s *PostgresStorage) UpdateExperimentRun(ctx context.Context, run *Experime
 	return err
 }
 
-// ListExperimentRuns lists all runs for an experiment
+// ListExperimentRuns lists all runs for an experiment.
 func (s *PostgresStorage) ListExperimentRuns(ctx context.Context, experimentID uuid.UUID) ([]*ExperimentRun, error) {
 	query := `
 		SELECT id, experiment_id, run_type, variant_config, trace_id, status, error, created_at, completed_at
@@ -561,7 +606,7 @@ func (s *PostgresStorage) ListExperimentRuns(ctx context.Context, experimentID u
 	return runs, rows.Err()
 }
 
-// CreateAnalysisResult creates a new analysis result
+// CreateAnalysisResult creates a new analysis result.
 func (s *PostgresStorage) CreateAnalysisResult(ctx context.Context, result *AnalysisResult) error {
 	query := `
 		INSERT INTO analysis_results (
@@ -578,14 +623,14 @@ func (s *PostgresStorage) CreateAnalysisResult(ctx context.Context, result *Anal
 	).Scan(&result.ID)
 }
 
-// GetAnalysisResults retrieves all analysis results for an experiment
+// GetAnalysisResults retrieves all analysis results for an experiment.
 func (s *PostgresStorage) GetAnalysisResults(ctx context.Context, experimentID uuid.UUID) ([]*AnalysisResult, error) {
 	query := `
 		SELECT id, experiment_id, baseline_run_id, candidate_run_id, behavior_diff, first_divergence,
 		       safety_diff, similarity_score, quality_metrics, token_delta, cost_delta, latency_delta, created_at
 		FROM analysis_results
 		WHERE experiment_id = $1
-		ORDER BY created_at ASC
+		ORDER BY created_at DESC, id DESC
 	`
 
 	rows, err := s.pool.Query(ctx, query, experimentID)
@@ -640,7 +685,7 @@ func (s *PostgresStorage) GetEvaluator(ctx context.Context, id int) (*Evaluator,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("evaluator not found: %d", id)
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -663,7 +708,7 @@ func (s *PostgresStorage) GetEvaluatorByName(ctx context.Context, name string) (
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("evaluator not found: %s", name)
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -725,8 +770,7 @@ func (s *PostgresStorage) DeleteEvaluator(ctx context.Context, id int) error {
 	return err
 }
 
-// copyUpsert performs COPY-into-temp-table then INSERT...ON CONFLICT DO NOTHING
-// into the real table, all within the given transaction. Returns rows inserted.
+// copyUpsert performs COPY-into-temp-table then INSERT...ON CONFLICT DO NOTHING.
 func copyUpsert(ctx context.Context, tx pgx.Tx, table string, columns []string, conflict string, nRows int, rowFn func(int) ([]any, error)) (int64, error) {
 	tmp := "tmp_" + table
 	_, err := tx.Exec(ctx, fmt.Sprintf(`CREATE TEMP TABLE %s (LIKE %s) ON COMMIT DROP`, tmp, table))
@@ -734,7 +778,6 @@ func copyUpsert(ctx context.Context, tx pgx.Tx, table string, columns []string, 
 		return 0, fmt.Errorf("create temp %s: %w", table, err)
 	}
 
-	// LIKE copies NOT NULL from the id column but not its SERIAL default, so relax it.
 	_, err = tx.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN id DROP NOT NULL`, tmp))
 	if err != nil {
 		return 0, fmt.Errorf("alter temp %s: %w", table, err)
@@ -757,8 +800,7 @@ func copyUpsert(ctx context.Context, tx pgx.Tx, table string, columns []string, 
 	return result.RowsAffected(), nil
 }
 
-// CreateIngestionBatch atomically inserts OTEL traces, replay traces, and tool captures
-// in a single transaction. If any stage fails, the entire batch is rolled back.
+// CreateIngestionBatch atomically inserts OTEL traces, replay traces, and tool captures.
 func (s *PostgresStorage) CreateIngestionBatch(ctx context.Context, otels []*OTELTrace, replays []*ReplayTrace, tools []*ToolCapture) (IngestCounts, error) {
 	var counts IngestCounts
 

@@ -1,3 +1,5 @@
+//go:build integration
+
 package storage
 
 import (
@@ -198,14 +200,19 @@ func TestPostgresStorage_Experiments(t *testing.T) {
 
 	// Create an experiment (baseline_trace_id is a logical reference, no FK)
 	expID := uuid.New()
+	threshold := 0.75
 	exp := &Experiment{
 		ID:              expID,
 		Name:            "Test Experiment",
 		BaselineTraceID: "trace-789",
 		Status:          StatusPending,
 		Progress:        0.0,
-		Config:          JSONB{"variants": []string{"model1", "model2"}},
-		CreatedAt:       time.Now(),
+		Config: ExperimentConfig{
+			Model:     "model1",
+			Provider:  "openai",
+			Threshold: &threshold,
+		},
+		CreatedAt: time.Now(),
 	}
 
 	err := storage.CreateExperiment(ctx, exp)

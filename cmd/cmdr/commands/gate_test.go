@@ -255,13 +255,13 @@ func TestResolveToolComparisonInputs_UsesSemanticWhenCapturesLoad(t *testing.T) 
 }
 
 func TestFormatFirstDivergence_ResponseContent(t *testing.T) {
-	summary := formatFirstDivergence(storage.JSONB{
+	summary := formatFirstDivergence(toStructuredDivergence(storage.JSONB{
 		"type":             "response_content",
 		"step_index":       2,
 		"jaccard":          0.33,
 		"baseline_excerpt": "Investigate pod state first",
 		"variant_excerpt":  "Delete the pod immediately",
-	})
+	}))
 
 	assert.Contains(t, summary, "step 2 response changed")
 	assert.Contains(t, summary, "Investigate pod state first")

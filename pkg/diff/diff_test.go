@@ -220,7 +220,7 @@ func TestToAnalysisResult(t *testing.T) {
 	assert.Equal(t, 340, result.LatencyDelta)
 	assert.Equal(t, float64(0), result.CostDelta)
 	assert.NotNil(t, result.BehaviorDiff)
-	assert.Equal(t, "pass", result.BehaviorDiff["verdict"])
+	assert.Equal(t, "pass", result.BehaviorDiff.Verdict)
 }
 
 func TestDefaultConfig(t *testing.T) {
@@ -379,7 +379,7 @@ func TestToAnalysisResult_WithSemanticData(t *testing.T) {
 
 	// SafetyDiff should be populated
 	assert.NotEmpty(t, result.SafetyDiff)
-	assert.Equal(t, true, result.SafetyDiff["escalation"])
+	assert.Equal(t, true, result.SafetyDiff.RiskEscalation)
 
 	// QualityMetrics should be populated
 	assert.NotEmpty(t, result.QualityMetrics)

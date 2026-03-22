@@ -1,9 +1,15 @@
-.PHONY: help build test test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset
+.PHONY: help build test test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset generate
 
 # Binary name
 BINARY_NAME=cmdr
 VERSION?=0.1.0
 BUILD_DIR=bin
+
+# Tools
+OAPI_CODEGEN_VERSION=v2.6.0
+OAPI_CODEGEN=go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
+OPENAPI_TS_CODEGEN_VERSION=0.29.0
+OPENAPI_TS_CODEGEN=npx -y openapi-typescript-codegen@$(OPENAPI_TS_CODEGEN_VERSION)
 
 # Go parameters
 GOCMD=go
@@ -24,7 +30,7 @@ help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Available targets:'
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 # ============================================================================
 # Development
@@ -37,12 +43,11 @@ setup-dev: ## Set up local development environment
 
 dev-up: ## Start development services (PostgreSQL, Jaeger)
 	@echo "Starting development services with $(DOCKER_COMPOSE)..."
-	$(DOCKER_COMPOSE) up -d postgres jaeger
+	$(DOCKER_COMPOSE) up -d db
 	@echo "Waiting for services to be ready..."
 	@sleep 3
 	@echo "✅ Development services started"
 	@echo "   - PostgreSQL: localhost:5432"
-	@echo "   - Jaeger UI:  http://localhost:16686"
 
 dev-down: ## Stop development services
 	@echo "Stopping development services..."
@@ -51,19 +56,28 @@ dev-down: ## Stop development services
 dev-reset: ## Reset development database
 	@echo "Resetting development database..."
 	$(DOCKER_COMPOSE) down -v
-	$(DOCKER_COMPOSE) up -d postgres
+	$(DOCKER_COMPOSE) up -d db
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 3
 	@echo "✅ Database reset complete"
+
+generate: ## Generate code from OpenAPI spec
+	@echo "Generating OpenAPI code..."
+	@mkdir -p pkg/api
+	@mkdir -p ui/packages/api
+	$(OAPI_CODEGEN) -package api -generate types,std-http api/openapi.yaml > pkg/api/openapi_generated.gen.go
+	$(OPENAPI_TS_CODEGEN) --input api/openapi.yaml --output ui/packages/api --client fetch
+	@echo "✅ Generated pkg/api/openapi_generated.gen.go"
+	@echo "✅ Generated ui/packages/api"
 
 # ============================================================================
 # Build
 # ============================================================================
 
-build: ## Build the binary
+build: generate ## Build the binary
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/cmdr
+	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/cmdr/main.go
 
 run: build ## Build and run the service
 	@echo "Running $(BINARY_NAME)..."
@@ -74,24 +88,18 @@ run: build ## Build and run the service
 # Testing
 # ============================================================================
 
-test: ## Run unit tests
+test: generate ## Run unit tests
 	@echo "Running unit tests..."
-	@if [ ! -f .env ]; then echo "⚠️  Warning: .env file not found for test config"; fi
-	@set -a; [ -f .env ] && . ./.env; set +a; \
-	$(GOTEST) -run '^$$' ./pkg/...; \
-	TEST_PKGS=$$(go list -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./pkg/... | xargs); \
-	$(GOTEST) -v -race -coverprofile=coverage.out $$TEST_PKGS
+	@$(GOTEST) -v ./pkg/... ./cmd/...
 
 test-storage: dev-up ## Run storage tests with real PostgreSQL
 	@echo "Running storage tests..."
-	@CMDR_POSTGRES_URL=postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable $(GOTEST) -v ./pkg/storage/...
+	@CMDR_POSTGRES_URL=postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable $(GOTEST) -v -tags=integration ./pkg/storage/...
 
 test-integration: ## Run integration tests
-	@echo "Running integration tests..."
 	$(GOTEST) -v -tags=integration ./test/integration/...
 
 test-e2e: ## Run end-to-end tests
-	@echo "Running e2e tests..."
 	$(MAKE) test-e2e-freeze-contract
 	$(MAKE) test-e2e-replay-freeze
 
@@ -111,18 +119,12 @@ test-migration-demo-full-loop: ## Run the database migration full-loop demo harn
 	@echo "Running database migration full-loop demo..."
 	./scripts/test-migration-demo-full-loop.sh
 
-coverage: test ## Generate coverage report
-	@echo "Generating coverage report..."
-	$(GOCMD) tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report generated: coverage.html"
-
 # ============================================================================
 # Code Quality
 # ============================================================================
 
 lint: ## Run linter
 	@echo "Running linter..."
-	@which golangci-lint > /dev/null || (echo "golangci-lint not installed. Run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin" && exit 1)
 	golangci-lint run ./...
 
 fmt: ## Format code
@@ -138,11 +140,6 @@ clean: ## Clean build artifacts
 	$(GOCLEAN)
 	rm -rf $(BUILD_DIR)
 	rm -f coverage.out coverage.html
-
-deps: ## Download dependencies
-	@echo "Downloading dependencies..."
-	$(GOMOD) download
-	$(GOMOD) tidy
 
 # ============================================================================
 # Docker

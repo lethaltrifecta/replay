@@ -11,23 +11,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type migrationDemoArtifactPaths struct {
-	Dir           string `json:"dir"`
-	Summary       string `json:"summary"`
-	JSON          string `json:"json"`
-	Report        string `json:"report"`
-	Highlight     string `json:"highlight"`
-	Script        string `json:"script"`
-	RunLog        string `json:"run_log"`
-	SafeVerdict   string `json:"safe_verdict"`
-	UnsafeVerdict string `json:"unsafe_verdict"`
-}
-
-type migrationDemoLatestOutput struct {
-	Paths    migrationDemoArtifactPaths   `json:"paths"`
-	Artifact *migrationDemoReportArtifact `json:"artifact"`
-}
-
 func runMigrationLatest(cmd *cobra.Command, args []string) error {
 	repoRoot, err := findRepoRootForDemo()
 	if err != nil {
