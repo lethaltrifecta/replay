@@ -149,16 +149,19 @@ func driftResultResponse(result *storage.DriftResult) DriftResult {
 	score := float32(result.DriftScore)
 	verdict := DriftResultVerdict(result.Verdict)
 
-	return DriftResult{
+	resp := DriftResult{
 		TraceId:         &result.TraceID,
 		BaselineTraceId: &result.BaselineTraceID,
 		DriftScore:      &score,
 		Verdict:         &verdict,
-		Details: &DriftDetails{
-			Reason:         &result.Details.Reason,
-			DivergenceStep: &result.Details.DivergenceStep,
-			RiskEscalation: &result.Details.RiskEscalation,
-		},
-		CreatedAt: &createdAt,
+		CreatedAt:       &createdAt,
 	}
+	if !result.Details.IsZero() {
+		resp.Details = &DriftDetails{
+			Reason:         stringPtr(result.Details.Reason),
+			DivergenceStep: result.Details.DivergenceStep,
+			RiskEscalation: boolPtrIfTrue(result.Details.RiskEscalation),
+		}
+	}
+	return resp
 }

@@ -32,8 +32,9 @@ func TestPollAndCheck_NoNewTraces(t *testing.T) {
 	ctx := context.Background()
 	baselineFP := &drift.Fingerprint{TraceID: "baseline-1"}
 	cfg := drift.DefaultConfig()
+	retryTraces := make(map[string]int)
 
-	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{}, time.Now())
+	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{}, time.Now(), retryTraces)
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.checked)
@@ -50,8 +51,9 @@ func TestPollAndCheck_SkipsBaselineTrace(t *testing.T) {
 	ctx := context.Background()
 	baselineFP := &drift.Fingerprint{TraceID: "baseline-1"}
 	cfg := drift.DefaultConfig()
+	retryTraces := make(map[string]int)
 
-	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{}, time.Now().Add(-time.Hour))
+	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{}, time.Now().Add(-time.Hour), retryTraces)
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.checked)
@@ -69,8 +71,9 @@ func TestPollAndCheck_SkipsAlreadyChecked(t *testing.T) {
 	ctx := context.Background()
 	baselineFP := &drift.Fingerprint{TraceID: "baseline-1"}
 	cfg := drift.DefaultConfig()
+	retryTraces := make(map[string]int)
 
-	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{}, now.Add(-time.Hour))
+	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{}, now.Add(-time.Hour), retryTraces)
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.checked)
@@ -91,8 +94,9 @@ func TestPollAndCheck_HighWaterMark(t *testing.T) {
 	ctx := context.Background()
 	baselineFP := &drift.Fingerprint{TraceID: "baseline-1"}
 	cfg := drift.DefaultConfig()
+	retryTraces := make(map[string]int)
 
-	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{}, time.Now().Add(-5*time.Minute))
+	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{}, time.Now().Add(-5*time.Minute), retryTraces)
 	require.NoError(t, err)
 
 	assert.Equal(t, t2, result.highWater)
@@ -116,8 +120,9 @@ func TestPollAndCheck_PaginatesBacklog(t *testing.T) {
 		Providers: []string{"openai"},
 	}
 	cfg := drift.DefaultConfig()
+	retryTraces := make(map[string]int)
 
-	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{SortAsc: false}, start.Add(-time.Second))
+	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{SortAsc: false}, start.Add(-time.Second), retryTraces)
 	require.NoError(t, err)
 
 	assert.Equal(t, 105, result.checked)
@@ -126,7 +131,7 @@ func TestPollAndCheck_PaginatesBacklog(t *testing.T) {
 	assert.Equal(t, start.Add(104*time.Second), result.highWater)
 }
 
-func TestPollAndCheck_DoesNotAdvanceHighWaterOnTraceFailure(t *testing.T) {
+func TestPollAndCheck_QueuesRetryAndAdvancesHighWaterOnTraceFailure(t *testing.T) {
 	store := newMockStore()
 	lastSeen := time.Now().Add(-time.Minute)
 	store.replayTraces = []*storage.ReplayTrace{
@@ -142,12 +147,41 @@ func TestPollAndCheck_DoesNotAdvanceHighWaterOnTraceFailure(t *testing.T) {
 		Providers: []string{"openai"},
 	}
 	cfg := drift.DefaultConfig()
+	retryTraces := make(map[string]int)
 
-	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{SortAsc: false}, lastSeen)
+	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{SortAsc: false}, lastSeen, retryTraces)
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.checked)
-	assert.Equal(t, lastSeen, result.highWater)
+	assert.Equal(t, lastSeen.Add(10*time.Second), result.highWater)
+	assert.Equal(t, []string{"trace-1"}, result.retried)
+	assert.Equal(t, 1, retryTraces["trace-1"])
+}
+
+func TestPollAndCheck_DropsPoisonTraceAfterMaxRetries(t *testing.T) {
+	store := newMockStore()
+	lastSeen := time.Now().Add(-time.Minute)
+	store.replayTraces = []*storage.ReplayTrace{
+		makeSpan("trace-1", lastSeen.Add(10*time.Second)),
+	}
+	store.createResultErr = errors.New("write failed")
+
+	ctx := context.Background()
+	baselineFP := &drift.Fingerprint{
+		TraceID:   "baseline-1",
+		StepCount: 1,
+		Models:    []string{"gpt-4"},
+		Providers: []string{"openai"},
+	}
+	cfg := drift.DefaultConfig()
+	retryTraces := map[string]int{"trace-1": maxDriftWatchRetries - 1}
+
+	result, err := pollAndCheck(ctx, store, "baseline-1", baselineFP, cfg, storage.TraceFilters{SortAsc: false}, lastSeen, retryTraces)
+	require.NoError(t, err)
+
+	assert.Empty(t, result.retried)
+	assert.Equal(t, []string{"trace-1"}, result.dropped)
+	assert.NotContains(t, retryTraces, "trace-1")
 }
 
 func TestCheckOneTrace_HappyPath(t *testing.T) {

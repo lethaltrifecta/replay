@@ -90,23 +90,35 @@ func analysisResultResponse(ar *storage.AnalysisResult) *AnalysisResult {
 	if ar == nil {
 		return nil
 	}
-	return &AnalysisResult{
+	resp := &AnalysisResult{
 		BehaviorDiff: &BehaviorDiff{
 			Verdict: &ar.BehaviorDiff.Verdict,
 			Reason:  &ar.BehaviorDiff.Reason,
 		},
-		FirstDivergence: &FirstDivergence{
-			StepIndex: &ar.FirstDivergence.StepIndex,
-			Type:      &ar.FirstDivergence.Type,
-			Baseline:  &ar.FirstDivergence.Baseline,
-			Variant:   &ar.FirstDivergence.Variant,
-		},
-		SafetyDiff: &SafetyDiff{
-			RiskEscalation: &ar.SafetyDiff.RiskEscalation,
-			BaselineRisk:   &ar.SafetyDiff.BaselineRisk,
-			VariantRisk:    &ar.SafetyDiff.VariantRisk,
-		},
 	}
+	if !ar.FirstDivergence.IsZero() {
+		resp.FirstDivergence = &FirstDivergence{
+			StepIndex:       ar.FirstDivergence.StepIndex,
+			ToolIndex:       ar.FirstDivergence.ToolIndex,
+			Type:            stringPtr(ar.FirstDivergence.Type),
+			Baseline:        stringPtr(ar.FirstDivergence.Baseline),
+			Variant:         stringPtr(ar.FirstDivergence.Variant),
+			BaselineExcerpt: stringPtr(ar.FirstDivergence.BaselineExcerpt),
+			VariantExcerpt:  stringPtr(ar.FirstDivergence.VariantExcerpt),
+			BaselineCount:   ar.FirstDivergence.BaselineCount,
+			VariantCount:    ar.FirstDivergence.VariantCount,
+			BaselineSteps:   ar.FirstDivergence.BaselineSteps,
+			VariantSteps:    ar.FirstDivergence.VariantSteps,
+		}
+	}
+	if !ar.SafetyDiff.IsZero() {
+		resp.SafetyDiff = &SafetyDiff{
+			RiskEscalation: boolPtrIfTrue(ar.SafetyDiff.RiskEscalation),
+			BaselineRisk:   stringPtr(ar.SafetyDiff.BaselineRisk),
+			VariantRisk:    stringPtr(ar.SafetyDiff.VariantRisk),
+		}
+	}
+	return resp
 }
 
 func experimentReportResponse(exp *storage.Experiment, runs []ExperimentRun, analysis *storage.AnalysisResult, runFailure *string) ExperimentReport {
@@ -164,8 +176,8 @@ func traceComparisonResponse(baseline, candidate *TraceDetail, drift *storage.Dr
 	if drift != nil {
 		value := float32(drift.DriftScore)
 		score = &value
-		divergenceReason = &drift.Details.Reason
-		divergenceIdx = &drift.Details.DivergenceStep
+		divergenceReason = stringPtr(drift.Details.Reason)
+		divergenceIdx = drift.Details.DivergenceStep
 	}
 
 	return TraceComparison{
@@ -181,6 +193,20 @@ func traceComparisonResponse(baseline, candidate *TraceDetail, drift *storage.Dr
 			SimilarityScore:     score,
 		},
 	}
+}
+
+func stringPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func boolPtrIfTrue(value bool) *bool {
+	if !value {
+		return nil
+	}
+	return &value
 }
 
 func buildExperimentRuns(runs []*storage.ExperimentRun) []ExperimentRun {

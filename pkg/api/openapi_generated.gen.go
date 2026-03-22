@@ -204,10 +204,17 @@ type ExperimentRunRunType string
 
 // FirstDivergence defines model for FirstDivergence.
 type FirstDivergence struct {
-	Baseline  *string `json:"baseline,omitempty"`
-	StepIndex *int    `json:"stepIndex,omitempty"`
-	Type      *string `json:"type,omitempty"`
-	Variant   *string `json:"variant,omitempty"`
+	Baseline        *string `json:"baseline,omitempty"`
+	BaselineCount   *int    `json:"baselineCount,omitempty"`
+	BaselineExcerpt *string `json:"baselineExcerpt,omitempty"`
+	BaselineSteps   *int    `json:"baselineSteps,omitempty"`
+	StepIndex       *int    `json:"stepIndex,omitempty"`
+	ToolIndex       *int    `json:"toolIndex,omitempty"`
+	Type            *string `json:"type,omitempty"`
+	Variant         *string `json:"variant,omitempty"`
+	VariantCount    *int    `json:"variantCount,omitempty"`
+	VariantExcerpt  *string `json:"variantExcerpt,omitempty"`
+	VariantSteps    *int    `json:"variantSteps,omitempty"`
 }
 
 // GateCheckRequest defines model for GateCheckRequest.

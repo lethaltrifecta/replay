@@ -305,10 +305,11 @@ func (s *Server) CreateGateCheck(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		<-s.sem
 		if errors.Is(err, storage.ErrTraceNotFound) {
-			writeError(w, http.StatusNotFound, err.Error(), "BASELINE_NOT_FOUND")
+			writeError(w, http.StatusNotFound, "baseline trace not found", "BASELINE_NOT_FOUND")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		s.log.Errorw("failed to initialize gate check", "baselineTraceId", req.BaselineTraceId, "model", req.Model, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to initialize gate check", "INTERNAL_ERROR")
 		return
 	}
 

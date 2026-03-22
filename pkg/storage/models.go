@@ -50,13 +50,18 @@ func (p *PromptContent) Scan(src interface{}) error  { return jsonScan(src, p) }
 
 // DriftDetails represents the structured details of behavioral drift.
 type DriftDetails struct {
-	Reason         string `json:"reason"`
-	DivergenceStep int    `json:"divergence_step"`
-	RiskEscalation bool   `json:"risk_escalation"`
+	Reason         string `json:"reason,omitempty"`
+	DivergenceStep *int   `json:"divergence_step,omitempty"`
+	RiskEscalation bool   `json:"risk_escalation,omitempty"`
 }
 
 func (d DriftDetails) Value() (driver.Value, error) { return jsonValue(d) }
 func (d *DriftDetails) Scan(src interface{}) error  { return jsonScan(src, d) }
+
+// IsZero reports whether the drift details carry any meaningful summary data.
+func (d DriftDetails) IsZero() bool {
+	return d.Reason == "" && d.DivergenceStep == nil && !d.RiskEscalation
+}
 
 // BehaviorDiff represents the behavior comparison in an analysis result.
 type BehaviorDiff struct {
@@ -69,24 +74,51 @@ func (b *BehaviorDiff) Scan(src interface{}) error  { return jsonScan(src, b) }
 
 // FirstDivergence represents where a candidate first deviated from a baseline.
 type FirstDivergence struct {
-	StepIndex int    `json:"step_index"`
-	Type      string `json:"type"`
-	Baseline  string `json:"baseline"`
-	Variant   string `json:"variant"`
+	StepIndex       *int   `json:"step_index,omitempty"`
+	ToolIndex       *int   `json:"tool_index,omitempty"`
+	Type            string `json:"type,omitempty"`
+	Baseline        string `json:"baseline,omitempty"`
+	Variant         string `json:"variant,omitempty"`
+	BaselineExcerpt string `json:"baseline_excerpt,omitempty"`
+	VariantExcerpt  string `json:"variant_excerpt,omitempty"`
+	BaselineCount   *int   `json:"baseline_count,omitempty"`
+	VariantCount    *int   `json:"variant_count,omitempty"`
+	BaselineSteps   *int   `json:"baseline_steps,omitempty"`
+	VariantSteps    *int   `json:"variant_steps,omitempty"`
 }
 
 func (f FirstDivergence) Value() (driver.Value, error) { return jsonValue(f) }
 func (f *FirstDivergence) Scan(src interface{}) error  { return jsonScan(src, f) }
 
+// IsZero reports whether the divergence payload is empty.
+func (f FirstDivergence) IsZero() bool {
+	return f.StepIndex == nil &&
+		f.ToolIndex == nil &&
+		f.Type == "" &&
+		f.Baseline == "" &&
+		f.Variant == "" &&
+		f.BaselineExcerpt == "" &&
+		f.VariantExcerpt == "" &&
+		f.BaselineCount == nil &&
+		f.VariantCount == nil &&
+		f.BaselineSteps == nil &&
+		f.VariantSteps == nil
+}
+
 // SafetyDiff represents the risk changes between baseline and candidate.
 type SafetyDiff struct {
-	RiskEscalation bool   `json:"risk_escalation"`
-	BaselineRisk   string `json:"baseline_risk"`
-	VariantRisk    string `json:"variant_risk"`
+	RiskEscalation bool   `json:"risk_escalation,omitempty"`
+	BaselineRisk   string `json:"baseline_risk,omitempty"`
+	VariantRisk    string `json:"variant_risk,omitempty"`
 }
 
 func (s SafetyDiff) Value() (driver.Value, error) { return jsonValue(s) }
 func (s *SafetyDiff) Scan(src interface{}) error  { return jsonScan(src, s) }
+
+// IsZero reports whether the safety diff carries any meaningful risk delta data.
+func (s SafetyDiff) IsZero() bool {
+	return !s.RiskEscalation && s.BaselineRisk == "" && s.VariantRisk == ""
+}
 
 // AnalysisResultData is the structured container for experiment analysis.
 type AnalysisResultData struct {

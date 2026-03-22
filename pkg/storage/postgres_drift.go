@@ -23,15 +23,14 @@ func (s *PostgresStorage) MarkTraceAsBaseline(ctx context.Context, b *Baseline) 
 	}
 
 	query := `
-		INSERT INTO baselines (trace_id, name, description, created_at)
-		VALUES ($1, $2, $3, NOW())
+		INSERT INTO baselines (trace_id, name, description)
+		VALUES ($1, $2, $3)
 		ON CONFLICT (trace_id) DO UPDATE SET
-			name = EXCLUDED.name,
-			description = EXCLUDED.description,
-			created_at = NOW()
+			name = COALESCE(EXCLUDED.name, baselines.name),
+			description = COALESCE(EXCLUDED.description, baselines.description)
+		RETURNING id, created_at
 	`
-	_, err = s.pool.Exec(ctx, query, b.TraceID, b.Name, b.Description)
-	return err
+	return s.pool.QueryRow(ctx, query, b.TraceID, b.Name, b.Description).Scan(&b.ID, &b.CreatedAt)
 }
 
 // GetBaseline retrieves a baseline by trace ID.
@@ -62,7 +61,7 @@ func (s *PostgresStorage) ListBaselines(ctx context.Context) ([]*Baseline, error
 	query := `
 		SELECT id, trace_id, name, description, created_at
 		FROM baselines
-		ORDER BY created_at DESC
+		ORDER BY created_at DESC, id DESC
 	`
 
 	rows, err := s.pool.Query(ctx, query)
@@ -100,6 +99,10 @@ func (s *PostgresStorage) UnmarkBaseline(ctx context.Context, traceID string) er
 
 // CreateDriftResult saves a new drift calculation.
 func (s *PostgresStorage) CreateDriftResult(ctx context.Context, r *DriftResult) error {
+	if r.DriftScore < 0 || r.DriftScore > 1 {
+		return fmt.Errorf("drift_score must be between 0 and 1, got %f", r.DriftScore)
+	}
+
 	query := `
 		INSERT INTO drift_results (trace_id, baseline_trace_id, drift_score, verdict, details, created_at)
 		VALUES ($1, $2, $3, $4, $5, NOW())
@@ -108,9 +111,9 @@ func (s *PostgresStorage) CreateDriftResult(ctx context.Context, r *DriftResult)
 			verdict = EXCLUDED.verdict,
 			details = EXCLUDED.details,
 			created_at = NOW()
+		RETURNING id, created_at
 	`
-	_, err := s.pool.Exec(ctx, query, r.TraceID, r.BaselineTraceID, r.DriftScore, r.Verdict, r.Details)
-	return err
+	return s.pool.QueryRow(ctx, query, r.TraceID, r.BaselineTraceID, r.DriftScore, r.Verdict, r.Details).Scan(&r.ID, &r.CreatedAt)
 }
 
 // GetDriftResults retrieves all drift results for a trace.
@@ -119,7 +122,7 @@ func (s *PostgresStorage) GetDriftResults(ctx context.Context, traceID string) (
 		SELECT id, trace_id, baseline_trace_id, drift_score, verdict, details, created_at
 		FROM drift_results
 		WHERE trace_id = $1
-		ORDER BY created_at DESC
+		ORDER BY created_at DESC, id DESC
 	`
 
 	rows, err := s.pool.Query(ctx, query, traceID)
@@ -149,7 +152,7 @@ func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselin
 		SELECT id, trace_id, baseline_trace_id, drift_score, verdict, details, created_at
 		FROM drift_results
 		WHERE baseline_trace_id = $1
-		ORDER BY created_at DESC
+		ORDER BY created_at DESC, id DESC
 	`
 	args := []interface{}{baselineTraceID}
 	if limit > 0 {

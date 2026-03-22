@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func intPtr(i int) *int { return &i }
+
 // helper to insert a replay trace for baseline tests
 func insertTestTrace(t *testing.T, s *PostgresStorage, traceID string) {
 	t.Helper()
@@ -70,6 +72,37 @@ func TestMarkTraceAsBaseline(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v2 baseline", *got2.Name)
 	assert.Equal(t, "updated description", *got2.Description)
+}
+
+func TestMarkTraceAsBaseline_PreservesOmittedFieldsOnRemark(t *testing.T) {
+	store := setupTestDB(t)
+	defer teardownTestDB(t, store)
+
+	ctx := context.Background()
+	insertTestTrace(t, store, "baseline-trace-preserve")
+
+	name := "original name"
+	description := "original description"
+	err := store.MarkTraceAsBaseline(ctx, &Baseline{
+		TraceID:     "baseline-trace-preserve",
+		Name:        &name,
+		Description: &description,
+	})
+	require.NoError(t, err)
+
+	updatedName := "updated name"
+	err = store.MarkTraceAsBaseline(ctx, &Baseline{
+		TraceID: "baseline-trace-preserve",
+		Name:    &updatedName,
+	})
+	require.NoError(t, err)
+
+	got, err := store.GetBaseline(ctx, "baseline-trace-preserve")
+	require.NoError(t, err)
+	require.NotNil(t, got.Name)
+	require.NotNil(t, got.Description)
+	assert.Equal(t, "updated name", *got.Name)
+	assert.Equal(t, "original description", *got.Description)
 }
 
 func TestMarkTraceAsBaseline_TraceNotFound(t *testing.T) {
@@ -174,7 +207,7 @@ func TestCreateDriftResult(t *testing.T) {
 		Verdict:         DriftVerdictPass,
 		Details: DriftDetails{
 			Reason:         "tool pattern changed",
-			DivergenceStep: 1,
+			DivergenceStep: intPtr(1),
 			RiskEscalation: false,
 		},
 	}
@@ -430,7 +463,7 @@ func TestCreateDriftResult_DuplicateIsIdempotent(t *testing.T) {
 		Verdict:         DriftVerdictPass,
 		Details: DriftDetails{
 			Reason:         "first",
-			DivergenceStep: 1,
+			DivergenceStep: intPtr(1),
 			RiskEscalation: false,
 		},
 	}
@@ -446,7 +479,7 @@ func TestCreateDriftResult_DuplicateIsIdempotent(t *testing.T) {
 		Verdict:         DriftVerdictFail,
 		Details: DriftDetails{
 			Reason:         "second",
-			DivergenceStep: 2,
+			DivergenceStep: intPtr(2),
 			RiskEscalation: true,
 		},
 	}

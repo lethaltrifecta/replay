@@ -3,6 +3,9 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os/signal"
+	"slices"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -104,27 +107,12 @@ func runDriftCheck(cmd *cobra.Command, args []string) error {
 	cfg := drift.DefaultConfig()
 	report := drift.Compare(baselineFP, candidateFP, cfg)
 
-	// Persistence
-	var reason string
-	if r, ok := report.Details["reason"].(string); ok {
-		reason = r
-	}
-	var divStep int
-	if ds, ok := report.Details["divergence_step"].(int); ok {
-		divStep = ds
-	} else if ds, ok := report.Details["divergence_step"].(float64); ok {
-		divStep = int(ds)
-	}
-
 	res := &storage.DriftResult{
 		TraceID:         candidateTraceID,
 		BaselineTraceID: baselineTraceID,
 		DriftScore:      report.Score,
 		Verdict:         report.Verdict,
-		Details: storage.DriftDetails{
-			Reason:         reason,
-			DivergenceStep: divStep,
-		},
+		Details:         drift.StructuredDetails(report),
 	}
 
 	if err := store.CreateDriftResult(ctx, res); err != nil {
@@ -152,7 +140,8 @@ func runDriftList(cmd *cobra.Command, args []string) error {
 	}
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	var results []*storage.DriftResult
 	if baselineFlag != "" {
@@ -231,6 +220,7 @@ func runDriftWatch(cmd *cobra.Command, args []string) error {
 	}
 
 	cfg := drift.DefaultConfig()
+	retryTraces := make(map[string]int)
 	filters := storage.TraceFilters{
 		SortAsc: false,
 	}
@@ -244,9 +234,10 @@ func runDriftWatch(cmd *cobra.Command, args []string) error {
 	for {
 		select {
 		case <-ctx.Done():
+			cmd.Println("Stopped watching.")
 			return nil
 		case <-ticker.C:
-			res, err := pollAndCheck(ctx, store, baselineTraceID, baselineFP, cfg, filters, highWater)
+			res, err := pollAndCheck(ctx, store, baselineTraceID, baselineFP, cfg, filters, highWater, retryTraces)
 			if err != nil {
 				cmd.PrintErrf("poll failed: %v\n", err)
 				continue
@@ -257,6 +248,12 @@ func runDriftWatch(cmd *cobra.Command, args []string) error {
 			if res.overflow {
 				cmd.PrintErrln("processed drift-watch backlog across multiple pages")
 			}
+			for _, traceID := range res.retried {
+				cmd.PrintErrf("retrying drift check for %s (attempt %d/%d)\n", traceID, retryTraces[traceID], maxDriftWatchRetries)
+			}
+			for _, traceID := range res.dropped {
+				cmd.PrintErrf("giving up on drift check for %s after %d failed attempts\n", traceID, maxDriftWatchRetries)
+			}
 		}
 	}
 }
@@ -265,9 +262,13 @@ type pollResult struct {
 	checked   int
 	highWater time.Time
 	overflow  bool
+	retried   []string
+	dropped   []string
 }
 
-func pollAndCheck(ctx context.Context, store storage.Storage, baselineTraceID string, baselineFP *drift.Fingerprint, cfg drift.CompareConfig, filters storage.TraceFilters, lastSeen time.Time) (pollResult, error) {
+const maxDriftWatchRetries = 3
+
+func pollAndCheck(ctx context.Context, store storage.Storage, baselineTraceID string, baselineFP *drift.Fingerprint, cfg drift.CompareConfig, filters storage.TraceFilters, lastSeen time.Time, retryTraces map[string]int) (pollResult, error) {
 	const pageSize = 100
 
 	// Deduplicate by trace_id, preserving first-seen order across the full backlog window.
@@ -277,8 +278,9 @@ func pollAndCheck(ctx context.Context, store storage.Storage, baselineTraceID st
 	var (
 		checkedCount int
 		highWater    time.Time
-		hadFailures  bool
 		pageCount    int
+		retried      []string
+		dropped      []string
 	)
 
 	for offset := 0; ; offset += pageSize {
@@ -327,21 +329,46 @@ func pollAndCheck(ctx context.Context, store storage.Storage, baselineTraceID st
 		}
 	}
 
+	if len(retryTraces) > 0 {
+		pendingRetries := make([]string, 0, len(retryTraces))
+		for traceID := range retryTraces {
+			if !seen[traceID] {
+				pendingRetries = append(pendingRetries, traceID)
+			}
+		}
+		slices.Sort(pendingRetries)
+		uniqueTraceIDs = append(uniqueTraceIDs, pendingRetries...)
+	}
+
 	for _, traceID := range uniqueTraceIDs {
 		report, err := checkOneTrace(ctx, store, baselineTraceID, baselineFP, cfg, traceID)
 		if err != nil {
-			hadFailures = true
+			if retryTraces != nil {
+				attempt := retryTraces[traceID] + 1
+				if attempt >= maxDriftWatchRetries {
+					delete(retryTraces, traceID)
+					dropped = append(dropped, traceID)
+				} else {
+					retryTraces[traceID] = attempt
+					retried = append(retried, traceID)
+				}
+			}
 			continue
+		}
+		if retryTraces != nil {
+			delete(retryTraces, traceID)
 		}
 		fmt.Printf("  %s  score=%.3f  verdict=%s\n", traceID, report.Score, verdictDisplay(report.Verdict))
 		checkedCount++
 	}
 
-	if hadFailures {
-		highWater = lastSeen
-	}
-
-	return pollResult{checked: checkedCount, highWater: highWater, overflow: pageCount > 1}, nil
+	return pollResult{
+		checked:   checkedCount,
+		highWater: highWater,
+		overflow:  pageCount > 1,
+		retried:   retried,
+		dropped:   dropped,
+	}, nil
 }
 
 // checkOneTrace fetches spans/tools for a single trace, compares against the baseline,
@@ -367,26 +394,12 @@ func checkOneTrace(ctx context.Context, store storage.Storage, baselineTraceID s
 
 	report := drift.Compare(baselineFP, candidateFP, cfg)
 
-	var reason string
-	if r, ok := report.Details["reason"].(string); ok {
-		reason = r
-	}
-	var divStep int
-	if ds, ok := report.Details["divergence_step"].(int); ok {
-		divStep = ds
-	} else if ds, ok := report.Details["divergence_step"].(float64); ok {
-		divStep = int(ds)
-	}
-
 	result := &storage.DriftResult{
 		TraceID:         traceID,
 		BaselineTraceID: baselineTraceID,
 		DriftScore:      report.Score,
 		Verdict:         report.Verdict,
-		Details: storage.DriftDetails{
-			Reason:         reason,
-			DivergenceStep: divStep,
-		},
+		Details:         drift.StructuredDetails(report),
 	}
 	if err := store.CreateDriftResult(ctx, result); err != nil {
 		return nil, fmt.Errorf("failed to store result: %w", err)

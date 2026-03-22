@@ -64,6 +64,7 @@ type mockStorage struct {
 	pingErr           error
 	toolErr           error // injected error for tool captures
 	analysisErr       error
+	createExperimentErr error
 	createAnalysisErr error
 }
 
@@ -174,6 +175,9 @@ func (m *mockStorage) ListUniqueTraces(_ context.Context, filters storage.TraceF
 }
 
 func (m *mockStorage) CreateExperiment(_ context.Context, exp *storage.Experiment) error {
+	if m.createExperimentErr != nil {
+		return m.createExperimentErr
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.experiments[exp.ID] = exp
@@ -881,7 +885,7 @@ func TestHandleExperimentReport_UsesLatestAnalysisResult(t *testing.T) {
 			TokenDelta:      1,
 			LatencyDelta:    1,
 			BehaviorDiff:    storage.BehaviorDiff{Verdict: "fail", Reason: "older"},
-			FirstDivergence: storage.FirstDivergence{StepIndex: 1},
+				FirstDivergence: storage.FirstDivergence{StepIndex: intPtr(1)},
 			SafetyDiff:      storage.SafetyDiff{},
 			CreatedAt:       time.Now().Add(-time.Minute),
 		},
@@ -892,7 +896,7 @@ func TestHandleExperimentReport_UsesLatestAnalysisResult(t *testing.T) {
 			TokenDelta:      2,
 			LatencyDelta:    3,
 			BehaviorDiff:    storage.BehaviorDiff{Verdict: "pass", Reason: "latest"},
-			FirstDivergence: storage.FirstDivergence{StepIndex: 2},
+				FirstDivergence: storage.FirstDivergence{StepIndex: intPtr(2)},
 			SafetyDiff:      storage.SafetyDiff{},
 			CreatedAt:       time.Now(),
 		},
@@ -1103,6 +1107,28 @@ func TestHandleGateCheck_AtCapacity_503(t *testing.T) {
 
 	// Drain semaphore
 	<-srv.sem
+}
+
+func TestHandleGateCheck_InternalSetupErrorDoesNotLeak(t *testing.T) {
+	store := newMockStorage()
+	store.createExperimentErr = errors.New("sql: connection refused")
+	seedBaseline(store, "trace-abc", 1)
+	srv := newTestServer(t, store, &mockCompleter{}, 5)
+
+	body, _ := json.Marshal(GateCheckRequest{
+		BaselineTraceId: "trace-abc",
+		Model:           "gpt-4o",
+		Threshold:       float32Ptr(0.8),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate/check", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "failed to initialize gate check")
+	assert.NotContains(t, w.Body.String(), "connection refused")
 }
 
 func TestHandleGateStatus_Running(t *testing.T) {

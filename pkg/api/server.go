@@ -86,6 +86,7 @@ func (s *Server) Start() error {
 
 // Shutdown gracefully stops the server and cancels any in-flight pipelines.
 func (s *Server) Shutdown(ctx context.Context) error {
+	err := s.httpServer.Shutdown(ctx)
 	s.cancel()
-	return s.httpServer.Shutdown(ctx)
+	return err
 }

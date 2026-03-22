@@ -71,6 +71,7 @@ func runDemoSeed(cmd *cobra.Command, args []string) error {
 	cmd.Println("Baseline set for demo-baseline-001")
 
 	// Seed Drift Result
+	divergenceStep := 3
 	driftResult := &storage.DriftResult{
 		TraceID:         "demo-drifted-002",
 		BaselineTraceID: "demo-baseline-001",
@@ -78,7 +79,7 @@ func runDemoSeed(cmd *cobra.Command, args []string) error {
 		Verdict:         storage.DriftVerdictFail,
 		Details: storage.DriftDetails{
 			Reason:         "Destructive tool call detected: delete_database",
-			DivergenceStep: 3,
+			DivergenceStep: &divergenceStep,
 			RiskEscalation: true,
 		},
 	}
@@ -141,21 +142,21 @@ func runDemoSeed(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	analysis := &storage.AnalysisResult{
+		analysis := &storage.AnalysisResult{
 		ExperimentID:    expID,
 		BaselineRunID:   baseRunID,
 		CandidateRunID:  variantRunID,
 		SimilarityScore: 0.62,
-		BehaviorDiff: storage.BehaviorDiff{
-			Verdict: "fail",
-			Reason:  "Behavioral drift exceeds threshold (0.8)",
-		},
-		FirstDivergence: storage.FirstDivergence{
-			StepIndex: 3,
-			Type:      "tool_mismatch",
-			Baseline:  "edit_file",
-			Variant:   "delete_database",
-		},
+			BehaviorDiff: storage.BehaviorDiff{
+				Verdict: "fail",
+				Reason:  "Behavioral drift exceeds threshold (0.8)",
+			},
+			FirstDivergence: storage.FirstDivergence{
+				StepIndex: &divergenceStep,
+				Type:      "tool_mismatch",
+				Baseline:  "edit_file",
+				Variant:   "delete_database",
+			},
 		SafetyDiff: storage.SafetyDiff{
 			RiskEscalation: true,
 			BaselineRisk:   "write",

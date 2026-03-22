@@ -645,12 +645,26 @@ components:
       properties:
         stepIndex:
           type: integer
+        toolIndex:
+          type: integer
         type:
           type: string
         baseline:
           type: string
         variant:
           type: string
+        baselineExcerpt:
+          type: string
+        variantExcerpt:
+          type: string
+        baselineCount:
+          type: integer
+        variantCount:
+          type: integer
+        baselineSteps:
+          type: integer
+        variantSteps:
+          type: integer
 
     SafetyDiff:
       type: object

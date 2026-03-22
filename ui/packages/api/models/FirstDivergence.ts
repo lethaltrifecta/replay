@@ -4,8 +4,15 @@
 /* eslint-disable */
 export type FirstDivergence = {
     stepIndex?: number;
+    toolIndex?: number;
     type?: string;
     baseline?: string;
     variant?: string;
+    baselineExcerpt?: string;
+    variantExcerpt?: string;
+    baselineCount?: number;
+    variantCount?: number;
+    baselineSteps?: number;
+    variantSteps?: number;
 };
 
