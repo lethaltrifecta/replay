@@ -3,11 +3,13 @@
 /* tslint:disable */
 /* eslint-disable */
 export type ToolCapture = {
+    stepIndex?: number;
     toolName?: string;
     args?: Record<string, any>;
     result?: Record<string, any>;
     riskClass?: ToolCapture.riskClass;
     latencyMs?: number;
+    error?: string;
 };
 export namespace ToolCapture {
     export enum riskClass {

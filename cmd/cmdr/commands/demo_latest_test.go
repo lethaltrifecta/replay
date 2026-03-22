@@ -28,36 +28,87 @@ func TestFindLatestMigrationDemoReportDir(t *testing.T) {
 	assert.Equal(t, newer, latest)
 }
 
-func TestResolveMigrationDemoArtifactPath(t *testing.T) {
-	paths := buildMigrationDemoArtifactPaths("/tmp/migration-demo")
+func TestResolveMigrationDemoPaths(t *testing.T) {
+	t.Run("artifact path", func(t *testing.T) {
+		paths := buildMigrationDemoArtifactPaths("/tmp/migration-demo")
 
-	path, err := resolveMigrationDemoArtifactPath(paths, "highlight")
+		tests := []struct {
+			name       string
+			artifact   string
+			wantPath   string
+			wantErrMsg string
+		}{
+			{name: "highlight", artifact: "highlight", wantPath: "/tmp/migration-demo/judge-highlight.md"},
+			{name: "invalid", artifact: "unknown", wantErrMsg: `invalid --artifact "unknown"`},
+		}
 
-	require.NoError(t, err)
-	assert.Equal(t, "/tmp/migration-demo/judge-highlight.md", path)
-}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				path, err := resolveMigrationDemoArtifactPath(paths, tt.artifact)
+				if tt.wantErrMsg != "" {
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), tt.wantErrMsg)
+					return
+				}
 
-func TestResolveMigrationDemoArtifactsRoot_Default(t *testing.T) {
-	cmd := &cobra.Command{}
-	cmd.Flags().String("artifacts-root", "", "")
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantPath, path)
+			})
+		}
+	})
 
-	root, err := resolveMigrationDemoArtifactsRoot(cmd, "/tmp/replay")
+	t.Run("artifacts root", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			flagValue string
+			repoRoot  string
+			want      string
+		}{
+			{name: "default", repoRoot: "/tmp/replay", want: "/tmp/replay/artifacts/migration-demo"},
+			{name: "relative override", flagValue: "tmp/demo", repoRoot: "/repo", want: "/repo/tmp/demo"},
+		}
 
-	require.NoError(t, err)
-	assert.Equal(t, "/tmp/replay/artifacts/migration-demo", root)
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				cmd := &cobra.Command{}
+				cmd.Flags().String("artifacts-root", "", "")
+				require.NoError(t, cmd.Flags().Set("artifacts-root", tt.flagValue))
+
+				root, err := resolveMigrationDemoArtifactsRoot(cmd, tt.repoRoot)
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, root)
+			})
+		}
+	})
 }
 
 func TestLoadMigrationDemoReportArtifact(t *testing.T) {
-	dir := t.TempDir()
-	reportPath := filepath.Join(dir, "report.json")
-	require.NoError(t, writeJSONFile(reportPath, sampleMigrationArtifact(dir)))
+	t.Run("success", func(t *testing.T) {
+		dir := t.TempDir()
+		reportPath := filepath.Join(dir, "report.json")
+		require.NoError(t, writeJSONFile(reportPath, sampleMigrationArtifact(dir)))
 
-	artifact, err := loadMigrationDemoReportArtifact(reportPath)
+		artifact, err := loadMigrationDemoReportArtifact(reportPath)
 
-	require.NoError(t, err)
-	assert.Equal(t, "database-migration", artifact.Scenario)
-	assert.Equal(t, "baseline-trace", artifact.Summary.BaselineTraceID)
-	assert.Equal(t, "unsafe-trace", artifact.Unsafe.TraceID)
+		require.NoError(t, err)
+		assert.Equal(t, "database-migration", artifact.Scenario)
+		assert.Equal(t, "baseline-trace", artifact.Summary.BaselineTraceID)
+		assert.Equal(t, "unsafe-trace", artifact.Unsafe.TraceID)
+	})
+
+	t.Run("missing sections", func(t *testing.T) {
+		dir := t.TempDir()
+		reportPath := filepath.Join(dir, "report.json")
+		require.NoError(t, writeJSONFile(reportPath, map[string]any{
+			"generatedAt": time.Date(2026, time.March, 8, 12, 34, 56, 0, time.UTC),
+			"scenario":    "database-migration",
+		}))
+
+		artifact, err := loadMigrationDemoReportArtifact(reportPath)
+		require.Error(t, err)
+		assert.Nil(t, artifact)
+		assert.Contains(t, err.Error(), "missing required sections")
+	})
 }
 
 func TestPrintMigrationLatest(t *testing.T) {

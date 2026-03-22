@@ -164,6 +164,9 @@ func (m *mockStorage) ListExperimentRuns(_ context.Context, _ uuid.UUID) ([]*sto
 func (m *mockStorage) GetAnalysisResults(_ context.Context, _ uuid.UUID) ([]*storage.AnalysisResult, error) {
 	return nil, nil
 }
+func (m *mockStorage) GetLatestAnalysisResults(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*storage.AnalysisResult, error) {
+	return nil, nil
+}
 func (m *mockStorage) CreateEvaluator(_ context.Context, _ *storage.Evaluator) error { return nil }
 func (m *mockStorage) GetEvaluator(_ context.Context, _ int) (*storage.Evaluator, error) {
 	return nil, nil

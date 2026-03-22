@@ -292,9 +292,9 @@ func (s *PostgresStorage) ListReplayTraces(ctx context.Context, filters TraceFil
 	}
 
 	if filters.SortAsc {
-		query += " ORDER BY created_at ASC"
+		query += " ORDER BY created_at ASC, id ASC"
 	} else {
-		query += " ORDER BY created_at DESC"
+		query += " ORDER BY created_at DESC, id DESC"
 	}
 
 	if filters.Limit > 0 {
@@ -651,6 +651,44 @@ func (s *PostgresStorage) GetAnalysisResults(ctx context.Context, experimentID u
 			return nil, err
 		}
 		results = append(results, &result)
+	}
+
+	return results, rows.Err()
+}
+
+// GetLatestAnalysisResults retrieves the latest analysis result for each experiment ID.
+func (s *PostgresStorage) GetLatestAnalysisResults(ctx context.Context, experimentIDs []uuid.UUID) (map[uuid.UUID]*AnalysisResult, error) {
+	if len(experimentIDs) == 0 {
+		return map[uuid.UUID]*AnalysisResult{}, nil
+	}
+
+	query := `
+		SELECT DISTINCT ON (experiment_id)
+			id, experiment_id, baseline_run_id, candidate_run_id, behavior_diff, first_divergence,
+			safety_diff, similarity_score, quality_metrics, token_delta, cost_delta, latency_delta, created_at
+		FROM analysis_results
+		WHERE experiment_id = ANY($1)
+		ORDER BY experiment_id, created_at DESC, id DESC
+	`
+
+	rows, err := s.pool.Query(ctx, query, experimentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make(map[uuid.UUID]*AnalysisResult, len(experimentIDs))
+	for rows.Next() {
+		var result AnalysisResult
+		err := rows.Scan(
+			&result.ID, &result.ExperimentID, &result.BaselineRunID, &result.CandidateRunID,
+			&result.BehaviorDiff, &result.FirstDivergence, &result.SafetyDiff, &result.SimilarityScore,
+			&result.QualityMetrics, &result.TokenDelta, &result.CostDelta, &result.LatencyDelta, &result.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		results[result.ExperimentID] = &result
 	}
 
 	return results, rows.Err()

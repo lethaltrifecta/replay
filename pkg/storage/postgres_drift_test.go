@@ -309,7 +309,7 @@ func TestGetLatestDriftResult(t *testing.T) {
 	// Not found
 	_, err := store.GetLatestDriftResult(ctx, "nonexistent")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no drift results found")
+	assert.ErrorIs(t, err, ErrNotFound)
 
 	// Insert multiple, should get the latest
 	r1 := &DriftResult{

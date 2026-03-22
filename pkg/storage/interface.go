@@ -56,6 +56,7 @@ type Storage interface {
 	// Analysis Results
 	CreateAnalysisResult(ctx context.Context, result *AnalysisResult) error
 	GetAnalysisResults(ctx context.Context, experimentID uuid.UUID) ([]*AnalysisResult, error)
+	GetLatestAnalysisResults(ctx context.Context, experimentIDs []uuid.UUID) (map[uuid.UUID]*AnalysisResult, error)
 
 	// Evaluators
 	CreateEvaluator(ctx context.Context, evaluator *Evaluator) error

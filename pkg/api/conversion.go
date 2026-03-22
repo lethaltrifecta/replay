@@ -234,6 +234,7 @@ func buildExperimentRuns(runs []*storage.ExperimentRun) []ExperimentRun {
 func buildToolCaptures(captures []*storage.ToolCapture) []ToolCapture {
 	oapiCaptures := make([]ToolCapture, 0, len(captures))
 	for _, c := range captures {
+		stepIndex := c.StepIndex
 		latencyMs := c.LatencyMS
 		riskClass := ToolCaptureRiskClass(c.RiskClass)
 
@@ -247,11 +248,13 @@ func buildToolCaptures(captures []*storage.ToolCapture) []ToolCapture {
 		}
 
 		oapiCaptures = append(oapiCaptures, ToolCapture{
+			StepIndex: &stepIndex,
 			ToolName:  &c.ToolName,
 			Args:      &argsMap,
 			Result:    &resultMap,
 			RiskClass: &riskClass,
 			LatencyMs: &latencyMs,
+			Error:     c.Error,
 		})
 	}
 	return oapiCaptures

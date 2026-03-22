@@ -181,6 +181,10 @@ func runDriftWatch(cmd *cobra.Command, args []string) error {
 	model, _ := cmd.Flags().GetString("model")
 	provider, _ := cmd.Flags().GetString("provider")
 
+	if interval <= 0 {
+		return fmt.Errorf("--interval must be greater than 0 seconds, got %d", interval)
+	}
+
 	store, err := connectDB()
 	if err != nil {
 		return err

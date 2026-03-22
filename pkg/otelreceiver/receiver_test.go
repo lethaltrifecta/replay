@@ -93,6 +93,9 @@ func (m *mockStorage) CreateAnalysisResult(ctx context.Context, result *storage.
 func (m *mockStorage) GetAnalysisResults(ctx context.Context, experimentID uuid.UUID) ([]*storage.AnalysisResult, error) {
 	return nil, nil
 }
+func (m *mockStorage) GetLatestAnalysisResults(ctx context.Context, experimentIDs []uuid.UUID) (map[uuid.UUID]*storage.AnalysisResult, error) {
+	return nil, nil
+}
 func (m *mockStorage) CreateEvaluator(ctx context.Context, evaluator *storage.Evaluator) error {
 	return nil
 }

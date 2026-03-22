@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lethaltrifecta/replay/pkg/agwclient"
+	"github.com/lethaltrifecta/replay/pkg/replay"
 	"github.com/lethaltrifecta/replay/pkg/storage"
 	"github.com/lethaltrifecta/replay/pkg/utils/logger"
 )
@@ -52,20 +54,22 @@ func (m *mockCompleter) Complete(_ context.Context, _ *agwclient.CompletionReque
 // --- Mock Storage ---
 
 type mockStorage struct {
-	mu                sync.Mutex
-	replayTraces      map[string][]*storage.ReplayTrace
-	experiments       map[uuid.UUID]*storage.Experiment
-	experimentRuns    map[uuid.UUID][]*storage.ExperimentRun
-	analysisResults   map[uuid.UUID][]*storage.AnalysisResult
-	toolCaptures      map[string][]*storage.ToolCapture
-	baselines         map[string]*storage.Baseline
-	driftResults      []*storage.DriftResult
-	createdReplays    []*storage.ReplayTrace
-	pingErr           error
-	toolErr           error // injected error for tool captures
-	analysisErr       error
+	mu                  sync.Mutex
+	replayTraces        map[string][]*storage.ReplayTrace
+	experiments         map[uuid.UUID]*storage.Experiment
+	experimentRuns      map[uuid.UUID][]*storage.ExperimentRun
+	analysisResults     map[uuid.UUID][]*storage.AnalysisResult
+	toolCaptures        map[string][]*storage.ToolCapture
+	baselines           map[string]*storage.Baseline
+	driftResults        []*storage.DriftResult
+	createdReplays      []*storage.ReplayTrace
+	pingErr             error
+	toolErr             error // injected error for tool captures
+	analysisErr         error
+	analysisCalls       int
+	latestAnalysisCalls int
 	createExperimentErr error
-	createAnalysisErr error
+	createAnalysisErr   error
 }
 
 func newMockStorage() *mockStorage {
@@ -188,7 +192,8 @@ func (m *mockStorage) GetExperiment(_ context.Context, id uuid.UUID) (*storage.E
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e, ok := m.experiments[id]; ok {
-		return e, nil
+		clone := *e
+		return &clone, nil
 	}
 	return nil, storage.ErrExperimentNotFound
 }
@@ -213,7 +218,8 @@ func (m *mockStorage) GetExperimentRun(_ context.Context, id uuid.UUID) (*storag
 	for _, runs := range m.experimentRuns {
 		for _, r := range runs {
 			if r.ID == id {
-				return r, nil
+				clone := *r
+				return &clone, nil
 			}
 		}
 	}
@@ -237,7 +243,13 @@ func (m *mockStorage) UpdateExperimentRun(_ context.Context, run *storage.Experi
 func (m *mockStorage) ListExperimentRuns(_ context.Context, experimentID uuid.UUID) ([]*storage.ExperimentRun, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.experimentRuns[experimentID], nil
+	runs := m.experimentRuns[experimentID]
+	out := make([]*storage.ExperimentRun, 0, len(runs))
+	for _, run := range runs {
+		clone := *run
+		out = append(out, &clone)
+	}
+	return out, nil
 }
 
 func (m *mockStorage) CreateReplayTrace(_ context.Context, trace *storage.ReplayTrace) error {
@@ -261,10 +273,35 @@ func (m *mockStorage) CreateAnalysisResult(_ context.Context, result *storage.An
 func (m *mockStorage) GetAnalysisResults(_ context.Context, experimentID uuid.UUID) ([]*storage.AnalysisResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.analysisCalls++
 	if m.analysisErr != nil {
 		return nil, m.analysisErr
 	}
-	return m.analysisResults[experimentID], nil
+	results := m.analysisResults[experimentID]
+	out := make([]*storage.AnalysisResult, 0, len(results))
+	for _, result := range results {
+		clone := *result
+		out = append(out, &clone)
+	}
+	return out, nil
+}
+
+func (m *mockStorage) GetLatestAnalysisResults(_ context.Context, experimentIDs []uuid.UUID) (map[uuid.UUID]*storage.AnalysisResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.latestAnalysisCalls++
+	if m.analysisErr != nil {
+		return nil, m.analysisErr
+	}
+
+	results := make(map[uuid.UUID]*storage.AnalysisResult, len(experimentIDs))
+	for _, experimentID := range experimentIDs {
+		if latest := latestAnalysisResult(m.analysisResults[experimentID]); latest != nil {
+			clone := *latest
+			results[experimentID] = &clone
+		}
+	}
+	return results, nil
 }
 
 func (m *mockStorage) GetToolCapturesByTrace(_ context.Context, traceID string) ([]*storage.ToolCapture, error) {
@@ -291,7 +328,8 @@ func (m *mockStorage) GetBaseline(_ context.Context, traceID string) (*storage.B
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if b, ok := m.baselines[traceID]; ok {
-		return b, nil
+		clone := *b
+		return &clone, nil
 	}
 	return nil, storage.ErrBaselineNotFound
 }
@@ -301,7 +339,8 @@ func (m *mockStorage) ListBaselines(_ context.Context) ([]*storage.Baseline, err
 	defer m.mu.Unlock()
 	var all []*storage.Baseline
 	for _, b := range m.baselines {
-		all = append(all, b)
+		clone := *b
+		all = append(all, &clone)
 	}
 	return all, nil
 }
@@ -416,7 +455,12 @@ func (m *mockStorage) ListExperiments(_ context.Context, filters storage.Experim
 	if filters.Limit > 0 && filters.Limit < len(experiments) {
 		experiments = experiments[:filters.Limit]
 	}
-	return experiments, nil
+	out := make([]*storage.Experiment, 0, len(experiments))
+	for _, exp := range experiments {
+		clone := *exp
+		out = append(out, &clone)
+	}
+	return out, nil
 }
 func (m *mockStorage) CreateEvaluator(_ context.Context, _ *storage.Evaluator) error { return nil }
 func (m *mockStorage) GetEvaluator(_ context.Context, _ int) (*storage.Evaluator, error) {
@@ -509,6 +553,49 @@ func seedBaseline(store *mockStorage, traceID string, steps int) {
 	}
 }
 
+func jsonRequest(t *testing.T, srv *Server, method, target string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var req *http.Request
+	if body == nil {
+		req = httptest.NewRequest(method, target, nil)
+	} else {
+		payload, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		req = httptest.NewRequest(method, target, bytes.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	recorder := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(recorder, req)
+	return recorder
+}
+
+func decodeJSON[T any](t *testing.T, recorder *httptest.ResponseRecorder) T {
+	t.Helper()
+
+	var value T
+	require.NotEmpty(t, recorder.Body.Bytes())
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &value))
+	return value
+}
+
+func completionResponse(content string) *agwclient.CompletionResponse {
+	return &agwclient.CompletionResponse{
+		ID:    uuid.NewString(),
+		Model: "test-model",
+		Choices: []agwclient.Choice{{
+			Message: agwclient.ChatMessage{Role: "assistant", Content: content},
+		}},
+		Usage: agwclient.Usage{
+			PromptTokens:     50,
+			CompletionTokens: 50,
+			TotalTokens:      100,
+		},
+	}
+}
+
 func float32Ptr(f float32) *float32 { return &f }
 func float64Ptr(f float64) *float64 { return &f }
 func intPtr(i int) *int             { return &i }
@@ -529,8 +616,10 @@ func TestHandleGateCheck_202(t *testing.T) {
 		Temperature:     float32Ptr(0.2),
 		TopP:            float32Ptr(0.9),
 		MaxTokens:       intPtr(256),
-		RequestHeaders:  &map[string]string{"X-Freeze-Trace-ID": "trace-abc", "Authorization": "redacted"},
-		Threshold:       float32Ptr(0.8),
+		RequestHeaders: &ReplayRequestHeaders{
+			FreezeTraceId: ptr("trace-abc"),
+		},
+		Threshold: float32Ptr(0.8),
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate/check", bytes.NewReader(body))
@@ -593,6 +682,21 @@ func TestHandleGateCheck_InvalidThreshold_400(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "threshold must be between 0 and 1")
 }
 
+func TestHandleGateCheck_RequestBodyTooLarge_400(t *testing.T) {
+	store := newMockStorage()
+	srv := newTestServer(t, store, &mockCompleter{}, 5)
+
+	oversized := fmt.Sprintf(`{"baselineTraceId":"trace-1","model":"%s"}`, strings.Repeat("a", maxJSONBodyBytes))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate/check", strings.NewReader(oversized))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "request body too large")
+}
+
 func TestHandleGateCheck_BaselineNotFound_404(t *testing.T) {
 	store := newMockStorage()
 	srv := newTestServer(t, store, &mockCompleter{}, 5)
@@ -610,34 +714,19 @@ func TestHandleGateCheck_BaselineNotFound_404(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "trace not found")
 }
 
-func TestHandleBaselines_Lifecycle(t *testing.T) {
+func TestHandleBaselines_DeleteRemovesBaseline(t *testing.T) {
 	store := newMockStorage()
 	seedBaseline(store, "trace-1", 1)
+	require.NoError(t, store.MarkTraceAsBaseline(context.Background(), &storage.Baseline{
+		TraceID: "trace-1",
+	}))
 	srv := newTestServer(t, store, nil, 5)
 
-	// 1. Create Baseline
-	body, _ := json.Marshal(map[string]string{"name": "B1"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/baselines/trace-1", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/baselines/trace-1", nil)
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusCreated, w.Code)
 
-	// 2. List Baselines
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/baselines", nil)
-	w = httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
-	var list []Baseline
-	json.Unmarshal(w.Body.Bytes(), &list)
-	assert.Len(t, list, 1)
-	assert.Equal(t, "trace-1", *list[0].TraceId)
-
-	// 3. Delete Baseline
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/baselines/trace-1", nil)
-	w = httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNoContent, w.Code)
-
-	// 4. Verify gone
 	_, err := store.GetBaseline(context.Background(), "trace-1")
 	assert.Error(t, err)
 }
@@ -671,35 +760,135 @@ func TestHandleBaselines_CreateAllowsEmptyBody(t *testing.T) {
 	assert.Nil(t, resp.Description)
 }
 
-func TestHandleTraces_ListAndGet(t *testing.T) {
+func TestHandleBaselines_CreateRejectsOversizedBody_400(t *testing.T) {
+	store := newMockStorage()
+	seedBaseline(store, "trace-1", 1)
+	srv := newTestServer(t, store, nil, 5)
+
+	oversized := fmt.Sprintf(`{"name":"%s"}`, strings.Repeat("a", maxJSONBodyBytes))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/baselines/trace-1", strings.NewReader(oversized))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "INVALID_BODY")
+}
+
+func TestHandleTraces_GetReturnsDetailAndToolCaptures(t *testing.T) {
 	store := newMockStorage()
 	seedBaseline(store, "trace-1", 2)
 	store.replayTraces["trace-1"][1].Model = "claude-3-5-sonnet"
 	store.replayTraces["trace-1"][1].Provider = "anthropic"
+	store.toolCaptures["trace-1"] = []*storage.ToolCapture{
+		{
+			TraceID:   "trace-1",
+			SpanID:    "capture-span-1",
+			StepIndex: 1,
+			ToolName:  "calculator",
+			Args:      storage.JSONB{"a": 2, "b": 2},
+			Result:    storage.JSONB{"sum": 4},
+			Error:     ptr("tool warning"),
+			LatencyMS: 42,
+			RiskClass: storage.RiskClassRead,
+		},
+	}
 	srv := newTestServer(t, store, nil, 5)
 
-	// List Traces
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/traces?limit=10&offset=0", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/traces/trace-1", nil)
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-	var list []TraceSummary
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
-	assert.Len(t, list, 1)
-	assert.Equal(t, "trace-1", *list[0].TraceId)
-	assert.Equal(t, 2, *list[0].StepCount)
-	assert.Equal(t, []string{"claude-3-5-sonnet", "gpt-4"}, *list[0].Models)
-	assert.Equal(t, []string{"anthropic", "openai"}, *list[0].Providers)
 
-	// Get Trace Detail
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/traces/trace-1", nil)
-	w = httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 	var detail TraceDetail
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
 	assert.Equal(t, "trace-1", *detail.TraceId)
 	assert.Len(t, *detail.Steps, 2)
+	require.Len(t, *detail.ToolCaptures, 1)
+	assert.Equal(t, 1, *(*detail.ToolCaptures)[0].StepIndex)
+	assert.Equal(t, "tool warning", *(*detail.ToolCaptures)[0].Error)
+}
+
+func TestHandleTraces_GetPreservesPromptToolFields(t *testing.T) {
+	store := newMockStorage()
+	seedBaseline(store, "trace-tools", 1)
+	store.replayTraces["trace-tools"][0].Prompt = storage.JSONB{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":         "assistant",
+				"content":      "Calling calculator",
+				"name":         "planner",
+				"tool_call_id": "call-123",
+				"tool_calls": []interface{}{
+					map[string]interface{}{
+						"id":   "call-123",
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":      "calculator",
+							"arguments": "{\"a\":2,\"b\":2}",
+						},
+					},
+				},
+			},
+		},
+		"tools": []interface{}{
+			map[string]interface{}{
+				"type": "function",
+				"function": map[string]interface{}{
+					"name": "calculator",
+				},
+			},
+		},
+		"tool_choice": map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name": "calculator",
+			},
+		},
+	}
+	srv := newTestServer(t, store, nil, 5)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/traces/trace-tools", nil)
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var payload map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+
+	steps, ok := payload["steps"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, steps, 1)
+
+	step, ok := steps[0].(map[string]interface{})
+	require.True(t, ok)
+
+	prompt, ok := step["prompt"].(map[string]interface{})
+	require.True(t, ok)
+
+	messages, ok := prompt["messages"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+
+	message, ok := messages[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "planner", message["name"])
+	assert.Equal(t, "call-123", message["tool_call_id"])
+	toolCalls, ok := message["tool_calls"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, toolCalls, 1)
+
+	tools, ok := prompt["tools"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, tools, 1)
+
+	toolChoice, ok := prompt["tool_choice"].(map[string]interface{})
+	require.True(t, ok)
+	function, ok := toolChoice["function"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "calculator", function["name"])
 }
 
 func TestHandleTraces_ListFilterPreservesFullSummary(t *testing.T) {
@@ -801,6 +990,65 @@ func TestHandleExperiments_AnalysisError_500(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "failed to fetch analysis results")
 }
 
+func TestHandleExperiments_UsesLatestAnalysisBatchLookup(t *testing.T) {
+	store := newMockStorage()
+	now := time.Now()
+
+	completedID := uuid.New()
+	failedID := uuid.New()
+	runningID := uuid.New()
+	store.experiments[completedID] = &storage.Experiment{
+		ID:              completedID,
+		Name:            "completed-exp",
+		BaselineTraceID: "trace-completed",
+		Status:          storage.StatusCompleted,
+		Progress:        1.0,
+		CreatedAt:       now,
+	}
+	store.experiments[failedID] = &storage.Experiment{
+		ID:              failedID,
+		Name:            "failed-exp",
+		BaselineTraceID: "trace-failed",
+		Status:          storage.StatusFailed,
+		Progress:        1.0,
+		CreatedAt:       now.Add(-time.Second),
+	}
+	store.experiments[runningID] = &storage.Experiment{
+		ID:              runningID,
+		Name:            "running-exp",
+		BaselineTraceID: "trace-running",
+		Status:          storage.StatusRunning,
+		Progress:        0.5,
+		CreatedAt:       now.Add(-2 * time.Second),
+	}
+	store.analysisResults[completedID] = []*storage.AnalysisResult{{
+		ID:           10,
+		ExperimentID: completedID,
+		BehaviorDiff: storage.BehaviorDiff{Verdict: "pass"},
+		CreatedAt:    now,
+	}}
+	store.analysisResults[failedID] = []*storage.AnalysisResult{{
+		ID:           11,
+		ExperimentID: failedID,
+		BehaviorDiff: storage.BehaviorDiff{Verdict: "fail"},
+		CreatedAt:    now,
+	}}
+	srv := newTestServer(t, store, nil, 5)
+
+	recorder := jsonRequest(t, srv, http.MethodGet, "/api/v1/experiments", nil)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	experiments := decodeJSON[[]Experiment](t, recorder)
+	require.Len(t, experiments, 3)
+	assert.Equal(t, 1, store.latestAnalysisCalls)
+	assert.Zero(t, store.analysisCalls)
+	require.NotNil(t, experiments[0].Verdict)
+	assert.Equal(t, "pass", string(*experiments[0].Verdict))
+	require.NotNil(t, experiments[1].Verdict)
+	assert.Equal(t, "fail", string(*experiments[1].Verdict))
+	assert.Nil(t, experiments[2].Verdict)
+}
+
 func TestHandleExperiment_TypedConfigAndOptionalVariantRuns(t *testing.T) {
 	store := newMockStorage()
 	expID := uuid.New()
@@ -859,7 +1107,7 @@ func TestHandleExperiment_TypedConfigAndOptionalVariantRuns(t *testing.T) {
 	assert.Equal(t, "gpt-4o", *resp.VariantConfig.Model)
 	assert.Equal(t, "openai", *resp.VariantConfig.Provider)
 	require.NotNil(t, resp.VariantConfig.RequestHeaders)
-	assert.Equal(t, "trace-1", (*resp.VariantConfig.RequestHeaders)["X-Freeze-Trace-ID"])
+	assert.Equal(t, "trace-1", *resp.VariantConfig.RequestHeaders.FreezeTraceId)
 	require.Len(t, *resp.Runs, 2)
 	assert.Nil(t, (*resp.Runs)[0].VariantConfig)
 	require.NotNil(t, (*resp.Runs)[1].VariantConfig)
@@ -885,7 +1133,7 @@ func TestHandleExperimentReport_UsesLatestAnalysisResult(t *testing.T) {
 			TokenDelta:      1,
 			LatencyDelta:    1,
 			BehaviorDiff:    storage.BehaviorDiff{Verdict: "fail", Reason: "older"},
-				FirstDivergence: storage.FirstDivergence{StepIndex: intPtr(1)},
+			FirstDivergence: storage.FirstDivergence{StepIndex: intPtr(1)},
 			SafetyDiff:      storage.SafetyDiff{},
 			CreatedAt:       time.Now().Add(-time.Minute),
 		},
@@ -896,7 +1144,7 @@ func TestHandleExperimentReport_UsesLatestAnalysisResult(t *testing.T) {
 			TokenDelta:      2,
 			LatencyDelta:    3,
 			BehaviorDiff:    storage.BehaviorDiff{Verdict: "pass", Reason: "latest"},
-				FirstDivergence: storage.FirstDivergence{StepIndex: intPtr(2)},
+			FirstDivergence: storage.FirstDivergence{StepIndex: intPtr(2)},
 			SafetyDiff:      storage.SafetyDiff{},
 			CreatedAt:       time.Now(),
 		},
@@ -917,6 +1165,247 @@ func TestHandleExperimentReport_UsesLatestAnalysisResult(t *testing.T) {
 	require.NotNil(t, resp.Analysis)
 	require.NotNil(t, resp.Analysis.BehaviorDiff)
 	assert.Equal(t, "latest", *resp.Analysis.BehaviorDiff.Reason)
+}
+
+func TestGovernanceWorkflowContract(t *testing.T) {
+	store := newMockStorage()
+	seedBaseline(store, "baseline-trace", 2)
+	seedBaseline(store, "candidate-trace", 2)
+	store.replayTraces["candidate-trace"][1].Completion = "candidate response"
+	store.replayTraces["candidate-trace"][1].Model = "claude-3-5-sonnet"
+	store.replayTraces["candidate-trace"][1].Provider = "anthropic"
+	store.toolCaptures["candidate-trace"] = []*storage.ToolCapture{
+		{
+			TraceID:   "candidate-trace",
+			SpanID:    "candidate-span-1",
+			StepIndex: 1,
+			ToolName:  "file_write",
+			Args:      storage.JSONB{"path": "report.md"},
+			Result:    storage.JSONB{"written": true},
+			Error:     ptr("requires approval"),
+			LatencyMS: 85,
+			RiskClass: storage.RiskClassWrite,
+		},
+	}
+
+	divergenceStep := 1
+	require.NoError(t, store.CreateDriftResult(context.Background(), &storage.DriftResult{
+		TraceID:         "candidate-trace",
+		BaselineTraceID: "baseline-trace",
+		DriftScore:      0.61,
+		Verdict:         storage.DriftVerdictWarn,
+		Details: storage.DriftDetails{
+			Reason:         "tool risk escalated",
+			DivergenceStep: &divergenceStep,
+			RiskEscalation: true,
+		},
+		CreatedAt: time.Now(),
+	}))
+
+	srv := newTestServer(t, store, &mockCompleter{
+		responses: []*agwclient.CompletionResponse{
+			completionResponse("baseline response"),
+			completionResponse("baseline response"),
+		},
+	}, 5)
+
+	t.Run("baseline selection", func(t *testing.T) {
+		recorder := jsonRequest(t, srv, http.MethodPost, "/api/v1/baselines/baseline-trace", map[string]string{
+			"name":        "Approved baseline",
+			"description": "Known-good agent behavior",
+		})
+		require.Equal(t, http.StatusCreated, recorder.Code)
+
+		created := decodeJSON[Baseline](t, recorder)
+		require.NotNil(t, created.TraceId)
+		assert.Equal(t, "baseline-trace", *created.TraceId)
+		require.NotNil(t, created.Name)
+		assert.Equal(t, "Approved baseline", *created.Name)
+
+		recorder = jsonRequest(t, srv, http.MethodGet, "/api/v1/baselines", nil)
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		baselines := decodeJSON[[]Baseline](t, recorder)
+		require.Len(t, baselines, 1)
+		assert.Equal(t, "baseline-trace", *baselines[0].TraceId)
+	})
+
+	t.Run("trace inbox", func(t *testing.T) {
+		recorder := jsonRequest(t, srv, http.MethodGet, "/api/v1/traces?limit=10&offset=0", nil)
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		traces := decodeJSON[[]TraceSummary](t, recorder)
+		require.Len(t, traces, 2)
+		assert.Equal(t, "candidate-trace", *traces[0].TraceId)
+		assert.Equal(t, "baseline-trace", *traces[1].TraceId)
+	})
+
+	t.Run("drift inbox and detail", func(t *testing.T) {
+		recorder := jsonRequest(t, srv, http.MethodGet, "/api/v1/drift-results?limit=10&offset=0", nil)
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		results := decodeJSON[[]DriftResult](t, recorder)
+		require.Len(t, results, 1)
+		require.NotNil(t, results[0].Verdict)
+		assert.Equal(t, DriftResultVerdict(storage.DriftVerdictWarn), *results[0].Verdict)
+
+		recorder = jsonRequest(t, srv, http.MethodGet, "/api/v1/drift-results/candidate-trace?baselineTraceId=baseline-trace", nil)
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		result := decodeJSON[DriftResult](t, recorder)
+		require.NotNil(t, result.BaselineTraceId)
+		assert.Equal(t, "baseline-trace", *result.BaselineTraceId)
+		require.NotNil(t, result.Details)
+		require.NotNil(t, result.Details.Reason)
+		assert.Equal(t, "tool risk escalated", *result.Details.Reason)
+		require.NotNil(t, result.Details.RiskEscalation)
+		assert.True(t, *result.Details.RiskEscalation)
+	})
+
+	t.Run("side-by-side comparison", func(t *testing.T) {
+		recorder := jsonRequest(t, srv, http.MethodGet, "/api/v1/compare/baseline-trace/candidate-trace", nil)
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		comparison := decodeJSON[TraceComparison](t, recorder)
+		require.NotNil(t, comparison.Baseline)
+		require.NotNil(t, comparison.Candidate)
+		require.NotNil(t, comparison.Diff)
+		require.NotNil(t, comparison.Diff.SimilarityScore)
+		assert.Equal(t, float32(0.61), *comparison.Diff.SimilarityScore)
+		require.NotNil(t, comparison.Diff.DivergenceReason)
+		assert.Equal(t, "tool risk escalated", *comparison.Diff.DivergenceReason)
+		require.NotNil(t, comparison.Candidate.ToolCaptures)
+		require.Len(t, *comparison.Candidate.ToolCaptures, 1)
+		assert.Equal(t, "file_write", *(*comparison.Candidate.ToolCaptures)[0].ToolName)
+		assert.Equal(t, "requires approval", *(*comparison.Candidate.ToolCaptures)[0].Error)
+	})
+
+	t.Run("gate kickoff, polling, and report", func(t *testing.T) {
+		recorder := jsonRequest(t, srv, http.MethodPost, "/api/v1/gate/check", GateCheckRequest{
+			BaselineTraceId: "baseline-trace",
+			Model:           "gpt-4o",
+			Provider:        ptr("openai"),
+			RequestHeaders: &ReplayRequestHeaders{
+				FreezeTraceId: ptr("baseline-trace"),
+			},
+			Threshold: float32Ptr(0.8),
+		})
+		require.Equal(t, http.StatusAccepted, recorder.Code)
+
+		started := decodeJSON[GateCheckResponse](t, recorder)
+		require.NotNil(t, started.ExperimentId)
+		experimentID := uuid.UUID(*started.ExperimentId)
+
+		require.Eventually(t, func() bool {
+			statusRecorder := jsonRequest(t, srv, http.MethodGet, "/api/v1/gate/status/"+experimentID.String(), nil)
+			if statusRecorder.Code != http.StatusOK {
+				return false
+			}
+			status := decodeJSON[GateStatusResponse](t, statusRecorder)
+			return status.Status != nil && *status.Status == storage.StatusCompleted
+		}, time.Second, 10*time.Millisecond)
+
+		recorder = jsonRequest(t, srv, http.MethodGet, "/api/v1/experiments?limit=10&offset=0", nil)
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		experiments := decodeJSON[[]Experiment](t, recorder)
+		require.Len(t, experiments, 1)
+		assert.Equal(t, experimentID, uuid.UUID(*experiments[0].Id))
+		require.NotNil(t, experiments[0].Verdict)
+		assert.Equal(t, "pass", *experiments[0].Verdict)
+
+		recorder = jsonRequest(t, srv, http.MethodGet, "/api/v1/experiments/"+experimentID.String()+"/report", nil)
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		report := decodeJSON[ExperimentReport](t, recorder)
+		require.NotNil(t, report.Status)
+		assert.Equal(t, storage.StatusCompleted, *report.Status)
+		require.NotNil(t, report.Verdict)
+		assert.Equal(t, "pass", *report.Verdict)
+		require.NotNil(t, report.SimilarityScore)
+		assert.InDelta(t, 0.85, *report.SimilarityScore, 0.000001)
+		require.NotNil(t, report.Analysis)
+		require.NotNil(t, report.Analysis.BehaviorDiff)
+		require.NotNil(t, report.Runs)
+		assert.Len(t, *report.Runs, 2)
+	})
+}
+
+func TestGovernanceWorkflowContract_FailVerdict(t *testing.T) {
+	store := newMockStorage()
+	seedBaseline(store, "baseline-fail-trace", 2)
+
+	srv := newTestServer(t, store, &mockCompleter{
+		responses: []*agwclient.CompletionResponse{
+			completionResponse("drop the production database immediately"),
+			completionResponse("delete every user account right now"),
+		},
+	}, 5)
+
+	recorder := jsonRequest(t, srv, http.MethodPost, "/api/v1/gate/check", GateCheckRequest{
+		BaselineTraceId: "baseline-fail-trace",
+		Model:           "gpt-4o",
+		Provider:        ptr("openai"),
+		RequestHeaders: &ReplayRequestHeaders{
+			FreezeTraceId: ptr("baseline-fail-trace"),
+		},
+		Threshold: float32Ptr(0.8),
+	})
+	require.Equal(t, http.StatusAccepted, recorder.Code)
+
+	started := decodeJSON[GateCheckResponse](t, recorder)
+	require.NotNil(t, started.ExperimentId)
+	experimentID := uuid.UUID(*started.ExperimentId)
+
+	require.Eventually(t, func() bool {
+		statusRecorder := jsonRequest(t, srv, http.MethodGet, "/api/v1/gate/status/"+experimentID.String(), nil)
+		if statusRecorder.Code != http.StatusOK {
+			return false
+		}
+		status := decodeJSON[GateStatusResponse](t, statusRecorder)
+		return status.Status != nil && *status.Status == storage.StatusCompleted
+	}, time.Second, 10*time.Millisecond)
+
+	recorder = jsonRequest(t, srv, http.MethodGet, "/api/v1/experiments?limit=10&offset=0", nil)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	experiments := decodeJSON[[]Experiment](t, recorder)
+	require.Len(t, experiments, 1)
+	require.NotNil(t, experiments[0].Verdict)
+	assert.Equal(t, "fail", *experiments[0].Verdict)
+
+	recorder = jsonRequest(t, srv, http.MethodGet, "/api/v1/experiments/"+experimentID.String()+"/report", nil)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	report := decodeJSON[ExperimentReport](t, recorder)
+	require.NotNil(t, report.Status)
+	assert.Equal(t, storage.StatusCompleted, *report.Status)
+	require.NotNil(t, report.Verdict)
+	assert.Equal(t, "fail", *report.Verdict)
+	require.NotNil(t, report.SimilarityScore)
+	assert.Less(t, *report.SimilarityScore, float32(0.8))
+	assert.Nil(t, report.Error)
+
+	require.NotNil(t, report.Analysis)
+	require.NotNil(t, report.Analysis.BehaviorDiff)
+	require.NotNil(t, report.Analysis.BehaviorDiff.Verdict)
+	assert.Equal(t, "fail", *report.Analysis.BehaviorDiff.Verdict)
+	require.NotNil(t, report.Analysis.FirstDivergence)
+	require.NotNil(t, report.Analysis.FirstDivergence.Type)
+	assert.Equal(t, "response_content", *report.Analysis.FirstDivergence.Type)
+	require.NotNil(t, report.Analysis.FirstDivergence.StepIndex)
+	assert.Equal(t, 0, *report.Analysis.FirstDivergence.StepIndex)
+	require.NotNil(t, report.Analysis.FirstDivergence.BaselineExcerpt)
+	assert.Equal(t, "baseline response", *report.Analysis.FirstDivergence.BaselineExcerpt)
+	require.NotNil(t, report.Analysis.FirstDivergence.VariantExcerpt)
+	assert.Contains(t, *report.Analysis.FirstDivergence.VariantExcerpt, "drop the production database")
+
+	require.NotNil(t, report.Runs)
+	require.Len(t, *report.Runs, 2)
+	require.NotNil(t, (*report.Runs)[1].Status)
+	assert.Equal(t, storage.StatusCompleted, *(*report.Runs)[1].Status)
+	require.NotNil(t, (*report.Runs)[1].TraceId)
+	assert.NotEmpty(t, *(*report.Runs)[1].TraceId)
 }
 
 func TestHandleDriftResults_Pagination(t *testing.T) {
@@ -972,41 +1461,20 @@ func TestHandleDriftResults_LimitIsClamped(t *testing.T) {
 	assert.Len(t, resp, 100)
 }
 
-func TestHandleCompareTraces_CorrectPair(t *testing.T) {
+func TestHandleCompareTraces_NoDriftResultOmitsScore(t *testing.T) {
 	store := newMockStorage()
 	seedBaseline(store, "base-1", 1)
-	seedBaseline(store, "cand-1", 1)
-
-	// Create drift result for specific pair
-	store.CreateDriftResult(context.Background(), &storage.DriftResult{
-		TraceID:         "cand-1",
-		BaselineTraceID: "base-1",
-		DriftScore:      0.88,
-		Details:         storage.DriftDetails{Reason: "matches perfectly"},
-	})
+	seedBaseline(store, "other-cand", 1)
 
 	srv := newTestServer(t, store, nil, 5)
 
-	// 1. Success case
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/compare/base-1/cand-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/compare/base-1/other-cand", nil)
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp TraceComparison
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotNil(t, resp.Diff.SimilarityScore)
-	assert.Equal(t, float32(0.88), *resp.Diff.SimilarityScore)
-
-	// 2. No result case (should omit score)
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/compare/base-1/other-cand", nil)
-	// Seed other-cand traces first so we don't 404 on traces
-	seedBaseline(store, "other-cand", 1)
-	w = httptest.NewRecorder()
-	srv.httpServer.Handler.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp2 TraceComparison
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp2))
-	assert.Nil(t, resp2.Diff.SimilarityScore)
+	assert.Nil(t, resp.Diff.SimilarityScore)
 }
 
 func TestHandleDriftResult_AmbiguousRequiresBaseline(t *testing.T) {
@@ -1166,7 +1634,7 @@ func TestHandleGateStatus_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestHandleGateReport_Completed(t *testing.T) {
+func TestHandleExperimentReport_FailedRunExposesError(t *testing.T) {
 	store := newMockStorage()
 	expID := uuid.New()
 	baselineRunID := uuid.New()
@@ -1175,20 +1643,17 @@ func TestHandleGateReport_Completed(t *testing.T) {
 	store.experiments[expID] = &storage.Experiment{
 		ID:              expID,
 		BaselineTraceID: "trace-abc",
-		Status:          storage.StatusCompleted,
+		Status:          storage.StatusFailed,
 		Progress:        1.0,
 	}
 	store.experimentRuns[expID] = []*storage.ExperimentRun{
 		{ID: baselineRunID, ExperimentID: expID, RunType: storage.RunTypeBaseline, Status: storage.StatusCompleted},
-		{ID: variantRunID, ExperimentID: expID, RunType: storage.RunTypeVariant, Status: storage.StatusCompleted},
-	}
-	store.analysisResults[expID] = []*storage.AnalysisResult{
 		{
-			ExperimentID:    expID,
-			SimilarityScore: 0.92,
-			TokenDelta:      150,
-			LatencyDelta:    200,
-			BehaviorDiff:    storage.BehaviorDiff{Verdict: "pass"},
+			ID:           variantRunID,
+			ExperimentID: expID,
+			RunType:      storage.RunTypeVariant,
+			Status:       storage.StatusFailed,
+			Error:        ptr("agentgateway timeout"),
 		},
 	}
 
@@ -1202,140 +1667,150 @@ func TestHandleGateReport_Completed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp ExperimentReport
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "completed", *resp.Status)
-	assert.Equal(t, "pass", *resp.Verdict)
-	require.NotNil(t, resp.SimilarityScore)
-	assert.Equal(t, float32(0.92), *resp.SimilarityScore)
+	assert.Equal(t, "failed", *resp.Status)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "agentgateway timeout", *resp.Error)
+	assert.Nil(t, resp.Verdict)
+	assert.Nil(t, resp.SimilarityScore)
 	assert.Len(t, *resp.Runs, 2)
 }
 
 func TestHandleHealth(t *testing.T) {
-	store := newMockStorage()
-	srv := newTestServer(t, store, &mockCompleter{}, 5)
+	tests := []struct {
+		name       string
+		pingErr    error
+		wantStatus string
+	}{
+		{name: "ok", wantStatus: "ok"},
+		{name: "degraded", pingErr: errors.New("db down"), wantStatus: "degraded"},
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
-	w := httptest.NewRecorder()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMockStorage()
+			store.pingErr = tt.pingErr
+			srv := newTestServer(t, store, &mockCompleter{}, 5)
 
-	srv.httpServer.Handler.ServeHTTP(w, req)
+			recorder := jsonRequest(t, srv, http.MethodGet, "/api/v1/health", nil)
+			require.Equal(t, http.StatusOK, recorder.Code)
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "ok", resp["status"])
+			resp := decodeJSON[map[string]string](t, recorder)
+			assert.Equal(t, tt.wantStatus, resp["status"])
+		})
+	}
 }
 
-func TestHandleHealth_Degraded(t *testing.T) {
-	store := newMockStorage()
-	store.pingErr = errors.New("db down")
-	srv := newTestServer(t, store, &mockCompleter{}, 5)
+func TestRequestHeaderContract(t *testing.T) {
+	t.Run("sanitize request headers", func(t *testing.T) {
+		tests := []struct {
+			name string
+			raw  map[string]string
+			want map[string]string
+		}{
+			{
+				name: "allowlist filters unknown headers",
+				raw: map[string]string{
+					"X-Freeze-Trace-ID": "trace-1",
+					"Authorization":     "Bearer sk-secret",
+					"X-Custom":          "should-be-dropped",
+				},
+				want: map[string]string{
+					http.CanonicalHeaderKey("X-Freeze-Trace-ID"): "trace-1",
+				},
+			},
+			{
+				name: "canonicalizes freeze keys",
+				raw: map[string]string{
+					"x-freeze-trace-id": "trace-1",
+					"X-FREEZE-SPAN-ID":  "span-1",
+				},
+				want: map[string]string{
+					http.CanonicalHeaderKey("X-Freeze-Trace-ID"): "trace-1",
+					http.CanonicalHeaderKey("X-Freeze-Span-ID"):  "span-1",
+				},
+			},
+			{
+				name: "all freeze headers survive",
+				raw: map[string]string{
+					"X-Freeze-Trace-ID":   "trace-1",
+					"X-Freeze-Span-ID":    "span-1",
+					"X-Freeze-Step-Index": "2",
+				},
+				want: map[string]string{
+					http.CanonicalHeaderKey("X-Freeze-Trace-ID"):   "trace-1",
+					http.CanonicalHeaderKey("X-Freeze-Span-ID"):    "span-1",
+					http.CanonicalHeaderKey("X-Freeze-Step-Index"): "2",
+				},
+			},
+			{name: "nil remains nil", raw: nil, want: nil},
+			{name: "empty remains nil", raw: map[string]string{}, want: nil},
+			{name: "only disallowed headers become nil", raw: map[string]string{"Authorization": "secret"}, want: nil},
+		}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
-	w := httptest.NewRecorder()
-
-	srv.httpServer.Handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "degraded", resp["status"])
-}
-
-func TestSanitizeRequestHeaders_AllowlistFilters(t *testing.T) {
-	result := SanitizeRequestHeaders(map[string]string{
-		"X-Freeze-Trace-ID": "trace-1",
-		"Authorization":     "Bearer sk-secret",
-		"X-Custom":          "should-be-dropped",
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				assert.Equal(t, tt.want, SanitizeRequestHeaders(tt.raw))
+			})
+		}
 	})
 
-	assert.Equal(t, "trace-1", result["X-Freeze-Trace-Id"])
-	assert.Empty(t, result["Authorization"])
-	assert.Empty(t, result["X-Custom"])
-	assert.Len(t, result, 1)
-}
+	t.Run("api storage round trip", func(t *testing.T) {
+		headers := &ReplayRequestHeaders{
+			FreezeTraceId:   ptr("trace-1"),
+			FreezeSpanId:    ptr("span-1"),
+			FreezeStepIndex: ptr("2"),
+		}
 
-func TestSanitizeRequestHeaders_CanonicalizesKeys(t *testing.T) {
-	result := SanitizeRequestHeaders(map[string]string{
-		"x-freeze-trace-id": "trace-1",
-		"X-FREEZE-SPAN-ID":  "span-1",
+		storageHeaders := storageRequestHeadersFromAPI(headers)
+		require.Equal(t, map[string]string{
+			http.CanonicalHeaderKey("X-Freeze-Trace-ID"):   "trace-1",
+			http.CanonicalHeaderKey("X-Freeze-Span-ID"):    "span-1",
+			http.CanonicalHeaderKey("X-Freeze-Step-Index"): "2",
+		}, storageHeaders)
+
+		roundTrip := apiReplayRequestHeadersFromStorage(storageHeaders)
+		require.NotNil(t, roundTrip)
+		require.NotNil(t, roundTrip.FreezeTraceId)
+		require.NotNil(t, roundTrip.FreezeSpanId)
+		require.NotNil(t, roundTrip.FreezeStepIndex)
+		assert.Equal(t, "trace-1", *roundTrip.FreezeTraceId)
+		assert.Equal(t, "span-1", *roundTrip.FreezeSpanId)
+		assert.Equal(t, "2", *roundTrip.FreezeStepIndex)
 	})
-
-	assert.Equal(t, "trace-1", result["X-Freeze-Trace-Id"])
-	assert.Equal(t, "span-1", result["X-Freeze-Span-Id"])
 }
 
-func TestSanitizeRequestHeaders_NilOnEmpty(t *testing.T) {
-	assert.Nil(t, SanitizeRequestHeaders(nil))
-	assert.Nil(t, SanitizeRequestHeaders(map[string]string{}))
-	assert.Nil(t, SanitizeRequestHeaders(map[string]string{"Authorization": "secret"}))
-}
+func TestHandleGateCheck_NilCompleterVariants_503(t *testing.T) {
+	var typedNil *mockCompleter
 
-func TestSanitizeRequestHeaders_AllFreeze(t *testing.T) {
-	result := SanitizeRequestHeaders(map[string]string{
-		"X-Freeze-Trace-ID":   "trace-1",
-		"X-Freeze-Span-ID":    "span-1",
-		"X-Freeze-Step-Index": "2",
-	})
+	tests := []struct {
+		name      string
+		completer replay.Completer
+	}{
+		{name: "untyped nil", completer: nil},
+		{name: "typed nil", completer: typedNil},
+	}
 
-	assert.Len(t, result, 3)
-	assert.Equal(t, "trace-1", result["X-Freeze-Trace-Id"])
-	assert.Equal(t, "span-1", result["X-Freeze-Span-Id"])
-	assert.Equal(t, "2", result["X-Freeze-Step-Index"])
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMockStorage()
+			seedBaseline(store, "trace-abc", 1)
 
-func TestHandleGateCheck_NilCompleter_503(t *testing.T) {
-	store := newMockStorage()
-	seedBaseline(store, "trace-abc", 1)
+			log, err := logger.New("debug")
+			require.NoError(t, err)
+			srv := NewServer(ServerConfig{
+				Port:                 0,
+				MaxConcurrentReplays: 5,
+			}, store, tt.completer, log)
 
-	// Untyped nil completer
-	log, err := logger.New("debug")
-	require.NoError(t, err)
-	srv := NewServer(ServerConfig{
-		Port:                 0,
-		MaxConcurrentReplays: 5,
-	}, store, nil, log)
+			recorder := jsonRequest(t, srv, http.MethodPost, "/api/v1/gate/check", GateCheckRequest{
+				BaselineTraceId: "trace-abc",
+				Model:           "gpt-4",
+			})
 
-	body, _ := json.Marshal(GateCheckRequest{
-		BaselineTraceId: "trace-abc",
-		Model:           "gpt-4",
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate/check", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	srv.httpServer.Handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "agentgateway not configured")
-}
-
-func TestHandleGateCheck_TypedNilCompleter_503(t *testing.T) {
-	store := newMockStorage()
-	seedBaseline(store, "trace-abc", 1)
-
-	// Typed nil: simulates the serve.go path where *agwclient.Client is nil
-	// but stored in a replay.Completer interface (non-nil interface, nil value).
-	var typedNil *mockCompleter // nil pointer to a concrete type
-	log, err := logger.New("debug")
-	require.NoError(t, err)
-	srv := NewServer(ServerConfig{
-		Port:                 0,
-		MaxConcurrentReplays: 5,
-	}, store, typedNil, log)
-
-	body, _ := json.Marshal(GateCheckRequest{
-		BaselineTraceId: "trace-abc",
-		Model:           "gpt-4",
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/gate/check", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	srv.httpServer.Handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "agentgateway not configured")
+			assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+			assert.Contains(t, recorder.Body.String(), "agentgateway not configured")
+		})
+	}
 }
 
 type valueCompleter struct{}
@@ -1356,4 +1831,13 @@ func TestNewServer_ValueCompleter_DoesNotPanic(t *testing.T) {
 		}, store, valueCompleter{}, log)
 		require.NotNil(t, srv.completer)
 	})
+}
+
+func TestNewServer_SetsHTTPTimeouts(t *testing.T) {
+	store := newMockStorage()
+	srv := newTestServer(t, store, nil, 5)
+
+	require.Equal(t, 15*time.Second, srv.httpServer.ReadTimeout)
+	require.Equal(t, 30*time.Second, srv.httpServer.WriteTimeout)
+	require.Equal(t, 60*time.Second, srv.httpServer.IdleTimeout)
 }

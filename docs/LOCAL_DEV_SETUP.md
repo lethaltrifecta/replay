@@ -70,8 +70,8 @@ psql "$CMDR_POSTGRES_URL" -c "SELECT trace_id, model, provider, created_at FROM 
 ### Run drift checks
 
 ```bash
-cmdr drift baseline set <trace-id>
-cmdr drift check <candidate-trace-id>
+cmdr drift check <baseline-trace-id> <candidate-trace-id>
+cmdr drift list --limit 10
 ```
 
 ## Troubleshooting
@@ -92,6 +92,6 @@ Set `CMDR_AGENTGATEWAY_URL` in `.env` before running `make run`.
 ## Available commands
 
 - `cmdr serve` — OTLP receiver + HTTP API server
-- `cmdr drift baseline {set,list,remove}` / `cmdr drift check` / `cmdr drift status` / `cmdr drift watch`
+- `cmdr drift check <baseline> <candidate>` / `cmdr drift list` / `cmdr drift watch`
 - `cmdr gate check` / `cmdr gate report`
 - `cmdr demo seed` / `cmdr demo gate` / `cmdr demo migration {run,latest,verdict}`

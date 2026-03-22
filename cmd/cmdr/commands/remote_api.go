@@ -86,7 +86,7 @@ func remoteGateStatusError(resp *apiclient.GetGateStatusResp) error {
 	}
 }
 
-func remoteGateReportError(resp *apiclient.GetGateReportResp) error {
+func remoteExperimentReportError(resp *apiclient.GetExperimentReportResp) error {
 	switch {
 	case resp == nil:
 		return fmt.Errorf("fetch report: empty response")
@@ -116,9 +116,8 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 	if provider != "" {
 		request.Provider = &provider
 	}
-	if len(requestHeaders) > 0 {
-		headers := requestHeaders
-		request.RequestHeaders = &headers
+	if headers := remoteReplayRequestHeaders(requestHeaders); headers != nil {
+		request.RequestHeaders = headers
 	}
 
 	createResp, err := client.CreateGateCheckWithResponse(ctx, request)
@@ -152,7 +151,7 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 
 		status := *statusResp.JSON200.Status
 		switch status {
-		case storage.StatusRunning:
+		case storage.StatusPending, storage.StatusRunning:
 			progress := float32(0)
 			if statusResp.JSON200.Progress != nil {
 				progress = *statusResp.JSON200.Progress
@@ -161,19 +160,21 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 			continue
 		case storage.StatusCompleted, storage.StatusFailed:
 			return fetchAndPrintRemoteReport(ctx, client, cmd, experimentID, model)
+		case storage.StatusCancelled:
+			return fmt.Errorf("experiment cancelled")
 		default:
-			cmd.Printf("  Status: %s\n", status)
+			return fmt.Errorf("unexpected experiment status: %s", status)
 		}
 	}
 }
 
 func fetchAndPrintRemoteReport(ctx context.Context, client *apiclient.ClientWithResponses, cmd *cobra.Command, experimentID openapi_types.UUID, model string) error {
-	reportResp, err := client.GetGateReportWithResponse(ctx, experimentID)
+	reportResp, err := client.GetExperimentReportWithResponse(ctx, experimentID)
 	if err != nil {
 		return fmt.Errorf("fetch report: %w", err)
 	}
 	if reportResp.JSON200 == nil {
-		return remoteGateReportError(reportResp)
+		return remoteExperimentReportError(reportResp)
 	}
 
 	report := reportResp.JSON200
@@ -240,4 +241,25 @@ func remoteVariantModel(report *apiclient.ExperimentReport, fallback string) str
 
 func float32Ptr(value float32) *float32 {
 	return &value
+}
+
+func remoteReplayRequestHeaders(headers map[string]string) *apiclient.ReplayRequestHeaders {
+	var out apiclient.ReplayRequestHeaders
+	if len(headers) == 0 {
+		return nil
+	}
+
+	if value := headers[http.CanonicalHeaderKey("X-Freeze-Trace-ID")]; value != "" {
+		out.FreezeTraceId = &value
+	}
+	if value := headers[http.CanonicalHeaderKey("X-Freeze-Span-ID")]; value != "" {
+		out.FreezeSpanId = &value
+	}
+	if value := headers[http.CanonicalHeaderKey("X-Freeze-Step-Index")]; value != "" {
+		out.FreezeStepIndex = &value
+	}
+	if out.FreezeTraceId == nil && out.FreezeSpanId == nil && out.FreezeStepIndex == nil {
+		return nil
+	}
+	return &out
 }

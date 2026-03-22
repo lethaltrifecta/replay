@@ -16,14 +16,21 @@ import (
 )
 
 func connectDB() (storage.Storage, error) {
+	ctx := context.Background()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	store, err := storage.NewPostgresStorage(context.Background(), cfg.PostgresURL, cfg.PostgresMaxConn)
+	store, err := storage.NewPostgresStorage(ctx, cfg.PostgresURL, cfg.PostgresMaxConn)
 	if err != nil {
 		return nil, fmt.Errorf("connect to database: %w", err)
+	}
+
+	if err := store.Migrate(ctx); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 
 	return store, nil

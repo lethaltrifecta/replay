@@ -30,7 +30,7 @@ make demo
 
 This runs:
 1. `cmdr demo seed`
-2. `cmdr drift check demo-drifted-002 --baseline demo-baseline-001`
+2. `cmdr drift check demo-baseline-001 demo-drifted-002`
 3. `cmdr demo gate --baseline demo-baseline-001 --model gpt-4o-danger` (expected fail)
 4. `cmdr demo gate --baseline demo-baseline-001 --model claude-3-5-sonnet` (expected pass)
 
@@ -52,7 +52,7 @@ Note: seeding is idempotent; reruns skip duplicate tool-capture rows.
 ### 2) Show drift detection
 
 ```bash
-./bin/cmdr drift check demo-drifted-002 --baseline demo-baseline-001
+./bin/cmdr drift check demo-baseline-001 demo-drifted-002
 ```
 
 Expected:

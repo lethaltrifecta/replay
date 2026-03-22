@@ -19,72 +19,38 @@ import (
 	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
-func TestGateCheck_ThresholdValidation(t *testing.T) {
-	tests := []struct {
-		name      string
-		threshold string
-		wantErr   string
-	}{
-		{"negative", "-0.5", "--threshold must be between 0.0 and 1.0"},
-		{"above_one", "1.5", "--threshold must be between 0.0 and 1.0"},
-		{"way_above", "2.0", "--threshold must be between 0.0 and 1.0"},
+func newTestGateCheckCommand() *cobra.Command {
+	root := &cobra.Command{Use: "test"}
+	checkCmd := &cobra.Command{
+		Use:  "check",
+		RunE: runGateCheck,
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Create a fresh command tree so flag state doesn't leak
-			root := &cobra.Command{Use: "test"}
-			checkCmd := &cobra.Command{
-				Use:  "check",
-				RunE: runGateCheck,
-			}
-			checkCmd.Flags().String("baseline", "", "")
-			checkCmd.Flags().String("model", "", "")
-			checkCmd.Flags().String("provider", "", "")
-			checkCmd.Flags().Float64("threshold", 0.8, "")
-			root.AddCommand(checkCmd)
-
-			out := &strings.Builder{}
-			root.SetOut(out)
-			root.SetErr(out)
-
-			root.SetArgs([]string{"check", "--baseline", "test-trace", "--model", "gpt-4", "--threshold", tc.threshold})
-			err := root.Execute()
-
-			// Threshold validation runs before config.Load/connectDB,
-			// so the error should be about the threshold, not a DB failure.
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantErr)
-		})
-	}
+	checkCmd.Flags().String("baseline", "", "")
+	checkCmd.Flags().String("model", "", "")
+	checkCmd.Flags().String("provider", "", "")
+	checkCmd.Flags().Float64("threshold", 0.8, "")
+	root.AddCommand(checkCmd)
+	return root
 }
 
-func TestGateCheck_ValidThresholds(t *testing.T) {
-	// Valid threshold values should NOT trigger validation error.
-	// They will fail later (config.Load/connectDB), but not on threshold.
+func TestGateCheck_ThresholdValidation(t *testing.T) {
 	tests := []struct {
-		name      string
-		threshold string
+		name             string
+		threshold        string
+		wantThresholdErr bool
 	}{
-		{"zero", "0.0"},
-		{"one", "1.0"},
-		{"typical", "0.8"},
-		{"half", "0.5"},
+		{name: "negative", threshold: "-0.5", wantThresholdErr: true},
+		{name: "above one", threshold: "1.5", wantThresholdErr: true},
+		{name: "way above", threshold: "2.0", wantThresholdErr: true},
+		{name: "zero", threshold: "0.0", wantThresholdErr: false},
+		{name: "one", threshold: "1.0", wantThresholdErr: false},
+		{name: "typical", threshold: "0.8", wantThresholdErr: false},
+		{name: "half", threshold: "0.5", wantThresholdErr: false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			root := &cobra.Command{Use: "test"}
-			checkCmd := &cobra.Command{
-				Use:  "check",
-				RunE: runGateCheck,
-			}
-			checkCmd.Flags().String("baseline", "", "")
-			checkCmd.Flags().String("model", "", "")
-			checkCmd.Flags().String("provider", "", "")
-			checkCmd.Flags().Float64("threshold", 0.8, "")
-			root.AddCommand(checkCmd)
-
+			root := newTestGateCheckCommand()
 			out := &strings.Builder{}
 			root.SetOut(out)
 			root.SetErr(out)
@@ -92,7 +58,12 @@ func TestGateCheck_ValidThresholds(t *testing.T) {
 			root.SetArgs([]string{"check", "--baseline", "test-trace", "--model", "gpt-4", "--threshold", tc.threshold})
 			err := root.Execute()
 
-			// Should fail on config.Load or connectDB, NOT threshold validation
+			if tc.wantThresholdErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "--threshold must be between 0.0 and 1.0")
+				return
+			}
+
 			if err != nil {
 				assert.NotContains(t, err.Error(), "--threshold must be between")
 			}
@@ -330,7 +301,7 @@ func TestRunGateCheckRemote_UsesGeneratedClient(t *testing.T) {
 				"status":       storage.StatusCompleted,
 				"progress":     1.0,
 			}))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/gate/report/"+experimentID.String():
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/experiments/"+experimentID.String()+"/report":
 			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 				"experimentId":    experimentID.String(),
 				"baselineTraceId": "baseline-trace",
@@ -357,6 +328,9 @@ func TestRunGateCheckRemote_UsesGeneratedClient(t *testing.T) {
 	assert.Equal(t, "baseline-trace", submittedBody["baselineTraceId"])
 	assert.Equal(t, "gpt-4o", submittedBody["model"])
 	assert.Equal(t, "openai", submittedBody["provider"])
+	requestHeaders, ok := submittedBody["requestHeaders"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "baseline-trace", requestHeaders["freezeTraceId"])
 	assert.Contains(t, out.String(), "Experiment "+experimentID.String()+" submitted")
 	assert.Contains(t, out.String(), "Verdict:    PASS")
 }
@@ -379,12 +353,47 @@ func TestRunGateCheckRemote_ServerErrorIncludesAPIError(t *testing.T) {
 	assert.Contains(t, err.Error(), "agentgateway not configured")
 }
 
+func TestRunGateCheckRemote_CancelledStatusReturnsTerminalError(t *testing.T) {
+	previousInterval := remoteStatusPollInterval
+	remoteStatusPollInterval = time.Millisecond
+	t.Cleanup(func() {
+		remoteStatusPollInterval = previousInterval
+	})
+
+	experimentID := uuid.New()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/gate/check":
+			w.WriteHeader(http.StatusAccepted)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"experimentId": experimentID.String(),
+				"status":       storage.StatusRunning,
+			}))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/gate/status/"+experimentID.String():
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"experimentId": experimentID.String(),
+				"status":       storage.StatusCancelled,
+				"progress":     0.5,
+			}))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cmd := &cobra.Command{}
+	err := runGateCheckRemote(cmd, server.URL, "baseline-trace", "gpt-4o", "", nil, 0.8)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "experiment cancelled")
+}
+
 func TestFetchAndPrintRemoteReport_DerivesVariantModel(t *testing.T) {
 	experimentID := uuid.New()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.Equal(t, "/api/v1/gate/report/"+experimentID.String(), r.URL.Path)
+		require.Equal(t, "/api/v1/experiments/"+experimentID.String()+"/report", r.URL.Path)
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 			"experimentId":    experimentID.String(),
 			"baselineTraceId": "baseline-trace",

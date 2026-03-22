@@ -33,7 +33,7 @@ func (s *Server) ListBaselines(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) CreateBaseline(w http.ResponseWriter, r *http.Request, traceId string) {
 	var body CreateBaselineJSONRequestBody
-	if err := readOptionalJSON(r, &body); err != nil {
+	if err := readOptionalJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body", "INVALID_BODY")
 		return
 	}
@@ -146,17 +146,26 @@ func (s *Server) ListExperiments(w http.ResponseWriter, r *http.Request, params 
 	}
 
 	resp := make([]Experiment, 0, len(experiments))
+	needsVerdict := make([]uuid.UUID, 0, len(experiments))
+	for _, e := range experiments {
+		if e.Status == storage.StatusCompleted || e.Status == storage.StatusFailed {
+			needsVerdict = append(needsVerdict, e.ID)
+		}
+	}
+
+	latestResults := map[uuid.UUID]*storage.AnalysisResult{}
+	if len(needsVerdict) > 0 {
+		latestResults, err = s.store.GetLatestAnalysisResults(r.Context(), needsVerdict)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to fetch analysis results", "DB_ERROR")
+			return
+		}
+	}
+
 	for _, e := range experiments {
 		var verdict *string
-		if e.Status == storage.StatusCompleted || e.Status == storage.StatusFailed {
-			results, err := s.store.GetAnalysisResults(r.Context(), e.ID)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to fetch analysis results", "DB_ERROR")
-				return
-			}
-			if latest := latestAnalysisResult(results); latest != nil {
-				verdict = &latest.BehaviorDiff.Verdict
-			}
+		if latest := latestResults[e.ID]; latest != nil {
+			verdict = &latest.BehaviorDiff.Verdict
 		}
 
 		resp = append(resp, experimentResponse(e, verdict))
@@ -245,7 +254,7 @@ func (s *Server) GetExperimentReport(w http.ResponseWriter, r *http.Request, id 
 
 func (s *Server) CreateGateCheck(w http.ResponseWriter, r *http.Request) {
 	var req GateCheckRequest
-	if err := readJSON(r, &req); err != nil {
+	if err := readJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "INVALID_REQUEST")
 		return
 	}
@@ -286,11 +295,6 @@ func (s *Server) CreateGateCheck(w http.ResponseWriter, r *http.Request) {
 		provider = *req.Provider
 	}
 
-	reqHeaders := map[string]string{}
-	if req.RequestHeaders != nil {
-		reqHeaders = *req.RequestHeaders
-	}
-
 	engine := replay.NewEngine(s.store, s.completer)
 	variant := replay.VariantConfig{
 		Model:          req.Model,
@@ -298,7 +302,7 @@ func (s *Server) CreateGateCheck(w http.ResponseWriter, r *http.Request) {
 		Temperature:    float64PtrFromFloat32(req.Temperature),
 		TopP:           float64PtrFromFloat32(req.TopP),
 		MaxTokens:      req.MaxTokens,
-		RequestHeaders: SanitizeRequestHeaders(reqHeaders),
+		RequestHeaders: storageRequestHeadersFromAPI(req.RequestHeaders),
 	}
 
 	prepared, err := engine.Setup(r.Context(), req.BaselineTraceId, variant, threshold)
@@ -338,10 +342,6 @@ func (s *Server) GetGateStatus(w http.ResponseWriter, r *http.Request, id openap
 	}
 
 	writeJSON(w, http.StatusOK, gateStatusResponse(exp))
-}
-
-func (s *Server) GetGateReport(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
-	s.GetExperimentReport(w, r, id)
 }
 
 // --- Trace Handlers ---

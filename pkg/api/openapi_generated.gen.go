@@ -219,14 +219,14 @@ type FirstDivergence struct {
 
 // GateCheckRequest defines model for GateCheckRequest.
 type GateCheckRequest struct {
-	BaselineTraceId string             `json:"baselineTraceId"`
-	MaxTokens       *int               `json:"maxTokens,omitempty"`
-	Model           string             `json:"model"`
-	Provider        *string            `json:"provider,omitempty"`
-	RequestHeaders  *map[string]string `json:"requestHeaders,omitempty"`
-	Temperature     *float32           `json:"temperature,omitempty"`
-	Threshold       *float32           `json:"threshold,omitempty"`
-	TopP            *float32           `json:"topP,omitempty"`
+	BaselineTraceId string                `json:"baselineTraceId"`
+	MaxTokens       *int                  `json:"maxTokens,omitempty"`
+	Model           string                `json:"model"`
+	Provider        *string               `json:"provider,omitempty"`
+	RequestHeaders  *ReplayRequestHeaders `json:"requestHeaders,omitempty"`
+	Temperature     *float32              `json:"temperature,omitempty"`
+	Threshold       *float32              `json:"threshold,omitempty"`
+	TopP            *float32              `json:"topP,omitempty"`
 }
 
 // GateCheckResponse defines model for GateCheckResponse.
@@ -245,12 +245,26 @@ type GateStatusResponse struct {
 // PromptContent defines model for PromptContent.
 type PromptContent struct {
 	Messages *[]PromptMessage `json:"messages,omitempty"`
+
+	// ToolChoice Arbitrary tool-choice payload captured from the source trace.
+	ToolChoice interface{}               `json:"tool_choice,omitempty"`
+	Tools      *[]map[string]interface{} `json:"tools,omitempty"`
 }
 
 // PromptMessage defines model for PromptMessage.
 type PromptMessage struct {
-	Content *string `json:"content,omitempty"`
-	Role    *string `json:"role,omitempty"`
+	Content    *string                   `json:"content,omitempty"`
+	Name       *string                   `json:"name,omitempty"`
+	Role       *string                   `json:"role,omitempty"`
+	ToolCallId *string                   `json:"tool_call_id,omitempty"`
+	ToolCalls  *[]map[string]interface{} `json:"tool_calls,omitempty"`
+}
+
+// ReplayRequestHeaders defines model for ReplayRequestHeaders.
+type ReplayRequestHeaders struct {
+	FreezeSpanId    *string `json:"freezeSpanId,omitempty"`
+	FreezeStepIndex *string `json:"freezeStepIndex,omitempty"`
+	FreezeTraceId   *string `json:"freezeTraceId,omitempty"`
 }
 
 // SafetyDiff defines model for SafetyDiff.
@@ -263,9 +277,11 @@ type SafetyDiff struct {
 // ToolCapture defines model for ToolCapture.
 type ToolCapture struct {
 	Args      *map[string]interface{} `json:"args,omitempty"`
+	Error     *string                 `json:"error,omitempty"`
 	LatencyMs *int                    `json:"latencyMs,omitempty"`
 	Result    *map[string]interface{} `json:"result,omitempty"`
 	RiskClass *ToolCaptureRiskClass   `json:"riskClass,omitempty"`
+	StepIndex *int                    `json:"stepIndex,omitempty"`
 	ToolName  *string                 `json:"toolName,omitempty"`
 }
 
@@ -314,12 +330,12 @@ type TraceSummary struct {
 
 // VariantConfig defines model for VariantConfig.
 type VariantConfig struct {
-	MaxTokens      *int               `json:"maxTokens,omitempty"`
-	Model          *string            `json:"model,omitempty"`
-	Provider       *string            `json:"provider,omitempty"`
-	RequestHeaders *map[string]string `json:"requestHeaders,omitempty"`
-	Temperature    *float32           `json:"temperature,omitempty"`
-	TopP           *float32           `json:"topP,omitempty"`
+	MaxTokens      *int                  `json:"maxTokens,omitempty"`
+	Model          *string               `json:"model,omitempty"`
+	Provider       *string               `json:"provider,omitempty"`
+	RequestHeaders *ReplayRequestHeaders `json:"requestHeaders,omitempty"`
+	Temperature    *float32              `json:"temperature,omitempty"`
+	TopP           *float32              `json:"topP,omitempty"`
 }
 
 // Error defines model for Error.
@@ -395,15 +411,12 @@ type ServerInterface interface {
 	// Get experiment details
 	// (GET /experiments/{id})
 	GetExperiment(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
-	// Get full gate report for an experiment
+	// Get canonical experiment report for review
 	// (GET /experiments/{id}/report)
 	GetExperimentReport(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// Start a deployment gate check
 	// (POST /gate/check)
 	CreateGateCheck(w http.ResponseWriter, r *http.Request)
-	// Get full report of a gate check
-	// (GET /gate/report/{id})
-	GetGateReport(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// Get status of a gate check
 	// (GET /gate/status/{id})
 	GetGateStatus(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
@@ -703,31 +716,6 @@ func (siw *ServerInterfaceWrapper) CreateGateCheck(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
-// GetGateReport operation middleware
-func (siw *ServerInterfaceWrapper) GetGateReport(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	// ------------- Path parameter "id" -------------
-	var id openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetGateReport(w, r, id)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // GetGateStatus operation middleware
 func (siw *ServerInterfaceWrapper) GetGateStatus(w http.ResponseWriter, r *http.Request) {
 
@@ -973,7 +961,6 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("GET "+options.BaseURL+"/experiments/{id}", wrapper.GetExperiment)
 	m.HandleFunc("GET "+options.BaseURL+"/experiments/{id}/report", wrapper.GetExperimentReport)
 	m.HandleFunc("POST "+options.BaseURL+"/gate/check", wrapper.CreateGateCheck)
-	m.HandleFunc("GET "+options.BaseURL+"/gate/report/{id}", wrapper.GetGateReport)
 	m.HandleFunc("GET "+options.BaseURL+"/gate/status/{id}", wrapper.GetGateStatus)
 	m.HandleFunc("GET "+options.BaseURL+"/health", wrapper.GetHealth)
 	m.HandleFunc("GET "+options.BaseURL+"/traces", wrapper.ListTraces)

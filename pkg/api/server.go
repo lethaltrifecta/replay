@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"time"
 
 	"github.com/lethaltrifecta/replay/pkg/replay"
 	"github.com/lethaltrifecta/replay/pkg/storage"
@@ -67,8 +68,11 @@ func NewServer(cfg ServerConfig, store storage.Storage, completer replay.Complet
 	})
 
 	s.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: h,
+		Addr:         fmt.Sprintf(":%d", cfg.Port),
+		Handler:      h,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	return s

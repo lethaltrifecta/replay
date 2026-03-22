@@ -95,9 +95,8 @@ psql "$CMDR_POSTGRES_URL" -c "SELECT trace_id, tool_name, risk_class FROM tool_c
 ## 7) Run drift commands
 
 ```bash
-cmdr drift baseline set <trace-id> --name "local-baseline"
-cmdr drift baseline list
-cmdr drift check <candidate-trace-id>
+cmdr drift check <baseline-trace-id> <candidate-trace-id>
+cmdr drift list --limit 10
 ```
 
 ## Useful commands
@@ -115,7 +114,7 @@ make fmt
 ## What's available
 
 - `cmdr serve` — OTLP receiver + HTTP API server
-- `cmdr drift baseline {set,list,remove}` — manage baselines
-- `cmdr drift check` — compare traces against baselines
+- `cmdr drift check <baseline> <candidate>` — compare traces against an explicit baseline
+- `cmdr drift list` — inspect stored drift results
 - `cmdr gate check` — replay baseline with variant model, produce pass/fail verdict
 - `cmdr demo seed` / `cmdr demo gate` — deterministic demo (no external LLM needed)

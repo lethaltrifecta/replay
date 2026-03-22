@@ -210,7 +210,7 @@ paths:
   /experiments/{id}/report:
     get:
       tags: [Experiments]
-      summary: Get full gate report for an experiment
+      summary: Get canonical experiment report for review
       operationId: getExperimentReport
       parameters:
         - name: id
@@ -367,29 +367,6 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 
-  /gate/report/{id}:
-    get:
-      tags: [Experiments]
-      summary: Get full report of a gate check
-      operationId: getGateReport
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ExperimentReport'
-        '404':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-
   /health:
     get:
       tags: [System]
@@ -447,9 +424,7 @@ components:
         maxTokens:
           type: integer
         requestHeaders:
-          type: object
-          additionalProperties:
-            type: string
+          $ref: '#/components/schemas/ReplayRequestHeaders'
 
     GateCheckResponse:
       type: object
@@ -530,9 +505,17 @@ components:
         maxTokens:
           type: integer
         requestHeaders:
-          type: object
-          additionalProperties:
-            type: string
+          $ref: '#/components/schemas/ReplayRequestHeaders'
+
+    ReplayRequestHeaders:
+      type: object
+      properties:
+        freezeTraceId:
+          type: string
+        freezeSpanId:
+          type: string
+        freezeStepIndex:
+          type: string
 
     Experiment:
       type: object
@@ -702,6 +685,15 @@ components:
           type: string
         content:
           type: string
+        name:
+          type: string
+        tool_call_id:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
 
     PromptContent:
       type: object
@@ -710,6 +702,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PromptMessage'
+        tools:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        tool_choice:
+          description: Arbitrary tool-choice payload captured from the source trace.
 
     TraceStep:
       type: object
@@ -750,6 +749,8 @@ components:
     ToolCapture:
       type: object
       properties:
+        stepIndex:
+          type: integer
         toolName:
           type: string
         args:
@@ -763,6 +764,8 @@ components:
           enum: [read, write, destructive]
         latencyMs:
           type: integer
+        error:
+          type: string
 
     TraceComparison:
       type: object

@@ -223,14 +223,14 @@ type FirstDivergence struct {
 
 // GateCheckRequest defines model for GateCheckRequest.
 type GateCheckRequest struct {
-	BaselineTraceId string             `json:"baselineTraceId"`
-	MaxTokens       *int               `json:"maxTokens,omitempty"`
-	Model           string             `json:"model"`
-	Provider        *string            `json:"provider,omitempty"`
-	RequestHeaders  *map[string]string `json:"requestHeaders,omitempty"`
-	Temperature     *float32           `json:"temperature,omitempty"`
-	Threshold       *float32           `json:"threshold,omitempty"`
-	TopP            *float32           `json:"topP,omitempty"`
+	BaselineTraceId string                `json:"baselineTraceId"`
+	MaxTokens       *int                  `json:"maxTokens,omitempty"`
+	Model           string                `json:"model"`
+	Provider        *string               `json:"provider,omitempty"`
+	RequestHeaders  *ReplayRequestHeaders `json:"requestHeaders,omitempty"`
+	Temperature     *float32              `json:"temperature,omitempty"`
+	Threshold       *float32              `json:"threshold,omitempty"`
+	TopP            *float32              `json:"topP,omitempty"`
 }
 
 // GateCheckResponse defines model for GateCheckResponse.
@@ -249,12 +249,26 @@ type GateStatusResponse struct {
 // PromptContent defines model for PromptContent.
 type PromptContent struct {
 	Messages *[]PromptMessage `json:"messages,omitempty"`
+
+	// ToolChoice Arbitrary tool-choice payload captured from the source trace.
+	ToolChoice interface{}               `json:"tool_choice,omitempty"`
+	Tools      *[]map[string]interface{} `json:"tools,omitempty"`
 }
 
 // PromptMessage defines model for PromptMessage.
 type PromptMessage struct {
-	Content *string `json:"content,omitempty"`
-	Role    *string `json:"role,omitempty"`
+	Content    *string                   `json:"content,omitempty"`
+	Name       *string                   `json:"name,omitempty"`
+	Role       *string                   `json:"role,omitempty"`
+	ToolCallId *string                   `json:"tool_call_id,omitempty"`
+	ToolCalls  *[]map[string]interface{} `json:"tool_calls,omitempty"`
+}
+
+// ReplayRequestHeaders defines model for ReplayRequestHeaders.
+type ReplayRequestHeaders struct {
+	FreezeSpanId    *string `json:"freezeSpanId,omitempty"`
+	FreezeStepIndex *string `json:"freezeStepIndex,omitempty"`
+	FreezeTraceId   *string `json:"freezeTraceId,omitempty"`
 }
 
 // SafetyDiff defines model for SafetyDiff.
@@ -267,9 +281,11 @@ type SafetyDiff struct {
 // ToolCapture defines model for ToolCapture.
 type ToolCapture struct {
 	Args      *map[string]interface{} `json:"args,omitempty"`
+	Error     *string                 `json:"error,omitempty"`
 	LatencyMs *int                    `json:"latencyMs,omitempty"`
 	Result    *map[string]interface{} `json:"result,omitempty"`
 	RiskClass *ToolCaptureRiskClass   `json:"riskClass,omitempty"`
+	StepIndex *int                    `json:"stepIndex,omitempty"`
 	ToolName  *string                 `json:"toolName,omitempty"`
 }
 
@@ -318,12 +334,12 @@ type TraceSummary struct {
 
 // VariantConfig defines model for VariantConfig.
 type VariantConfig struct {
-	MaxTokens      *int               `json:"maxTokens,omitempty"`
-	Model          *string            `json:"model,omitempty"`
-	Provider       *string            `json:"provider,omitempty"`
-	RequestHeaders *map[string]string `json:"requestHeaders,omitempty"`
-	Temperature    *float32           `json:"temperature,omitempty"`
-	TopP           *float32           `json:"topP,omitempty"`
+	MaxTokens      *int                  `json:"maxTokens,omitempty"`
+	Model          *string               `json:"model,omitempty"`
+	Provider       *string               `json:"provider,omitempty"`
+	RequestHeaders *ReplayRequestHeaders `json:"requestHeaders,omitempty"`
+	Temperature    *float32              `json:"temperature,omitempty"`
+	TopP           *float32              `json:"topP,omitempty"`
 }
 
 // Error defines model for Error.
@@ -480,9 +496,6 @@ type ClientInterface interface {
 
 	CreateGateCheck(ctx context.Context, body CreateGateCheckJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// GetGateReport request
-	GetGateReport(ctx context.Context, id openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
-
 	// GetGateStatus request
 	GetGateStatus(ctx context.Context, id openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -630,18 +643,6 @@ func (c *Client) CreateGateCheckWithBody(ctx context.Context, contentType string
 
 func (c *Client) CreateGateCheck(ctx context.Context, body CreateGateCheckJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateGateCheckRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) GetGateReport(ctx context.Context, id openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetGateReportRequest(c.Server, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1159,40 +1160,6 @@ func NewCreateGateCheckRequestWithBody(server string, contentType string, body i
 	return req, nil
 }
 
-// NewGetGateReportRequest generates requests for GetGateReport
-func NewGetGateReportRequest(server string, id openapi_types.UUID) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/gate/report/%s", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
 // NewGetGateStatusRequest generates requests for GetGateStatus
 func NewGetGateStatusRequest(server string, id openapi_types.UUID) (*http.Request, error) {
 	var err error
@@ -1462,9 +1429,6 @@ type ClientWithResponsesInterface interface {
 
 	CreateGateCheckWithResponse(ctx context.Context, body CreateGateCheckJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateGateCheckResp, error)
 
-	// GetGateReportWithResponse request
-	GetGateReportWithResponse(ctx context.Context, id openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetGateReportResp, error)
-
 	// GetGateStatusWithResponse request
 	GetGateStatusWithResponse(ctx context.Context, id openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetGateStatusResp, error)
 
@@ -1718,30 +1682,6 @@ func (r CreateGateCheckResp) StatusCode() int {
 	return 0
 }
 
-type GetGateReportResp struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *ExperimentReport
-	JSON404      *Error
-	JSON500      *Error
-}
-
-// Status returns HTTPResponse.Status
-func (r GetGateReportResp) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetGateReportResp) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
 type GetGateStatusResp struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1942,15 +1882,6 @@ func (c *ClientWithResponses) CreateGateCheckWithResponse(ctx context.Context, b
 		return nil, err
 	}
 	return ParseCreateGateCheckResp(rsp)
-}
-
-// GetGateReportWithResponse request returning *GetGateReportResp
-func (c *ClientWithResponses) GetGateReportWithResponse(ctx context.Context, id openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetGateReportResp, error) {
-	rsp, err := c.GetGateReport(ctx, id, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseGetGateReportResp(rsp)
 }
 
 // GetGateStatusWithResponse request returning *GetGateStatusResp
@@ -2383,46 +2314,6 @@ func ParseCreateGateCheckResp(rsp *http.Response) (*CreateGateCheckResp, error) 
 			return nil, err
 		}
 		response.JSON503 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseGetGateReportResp parses an HTTP response from a GetGateReportWithResponse call
-func ParseGetGateReportResp(rsp *http.Response) (*GetGateReportResp, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &GetGateReportResp{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest ExperimentReport
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest Error
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest Error
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
 
 	}
 

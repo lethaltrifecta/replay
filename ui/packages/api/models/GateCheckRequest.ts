@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ReplayRequestHeaders } from './ReplayRequestHeaders';
 export type GateCheckRequest = {
     baselineTraceId: string;
     model: string;
@@ -10,6 +11,6 @@ export type GateCheckRequest = {
     temperature?: number;
     topP?: number;
     maxTokens?: number;
-    requestHeaders?: Record<string, string>;
+    requestHeaders?: ReplayRequestHeaders;
 };
 

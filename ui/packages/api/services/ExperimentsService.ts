@@ -60,7 +60,7 @@ export class ExperimentsService {
         });
     }
     /**
-     * Get full gate report for an experiment
+     * Get canonical experiment report for review
      * @param id
      * @returns ExperimentReport
      * @throws ApiError
@@ -114,27 +114,6 @@ export class ExperimentsService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/gate/status/{id}',
-            path: {
-                'id': id,
-            },
-            errors: {
-                404: `Generic error response`,
-                500: `Generic error response`,
-            },
-        });
-    }
-    /**
-     * Get full report of a gate check
-     * @param id
-     * @returns ExperimentReport
-     * @throws ApiError
-     */
-    public static getGateReport(
-        id: string,
-    ): CancelablePromise<ExperimentReport> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/gate/report/{id}',
             path: {
                 'id': id,
             },

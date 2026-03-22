@@ -22,6 +22,7 @@ export type { GateCheckResponse } from './models/GateCheckResponse';
 export type { GateStatusResponse } from './models/GateStatusResponse';
 export type { PromptContent } from './models/PromptContent';
 export type { PromptMessage } from './models/PromptMessage';
+export type { ReplayRequestHeaders } from './models/ReplayRequestHeaders';
 export type { SafetyDiff } from './models/SafetyDiff';
 export { ToolCapture } from './models/ToolCapture';
 export type { TraceComparison } from './models/TraceComparison';

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -206,4 +208,18 @@ func TestCheckOneTrace_HappyPath(t *testing.T) {
 	assert.NotNil(t, report)
 	require.Len(t, store.createdDriftResults, 1)
 	assert.Equal(t, "candidate-1", store.createdDriftResults[0].TraceID)
+}
+
+func TestRunDriftWatch_InvalidInterval(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().Int("interval", 0, "")
+	cmd.Flags().String("model", "", "")
+	cmd.Flags().String("provider", "", "")
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetErr(&strings.Builder{})
+
+	err := runDriftWatch(cmd, []string{"baseline-1"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--interval must be greater than 0 seconds")
 }

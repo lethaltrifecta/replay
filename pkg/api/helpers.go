@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"slices"
 
@@ -16,6 +15,7 @@ import (
 const (
 	defaultListLimit = 20
 	maxListLimit     = 100
+	maxJSONBodyBytes = 1 << 20
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -27,33 +27,43 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-func readJSON(r *http.Request, v any) error {
+func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	if r.Body == nil {
 		return errors.New("empty request body")
 	}
 	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
+		return normalizeJSONDecodeError(err)
 	}
 	return nil
 }
 
-func readOptionalJSON(r *http.Request, v any) error {
+func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	if r.Body == nil {
 		return nil
 	}
 	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
-		return fmt.Errorf("invalid JSON: %w", err)
+		return normalizeJSONDecodeError(err)
 	}
 	return nil
+}
+
+func normalizeJSONDecodeError(err error) error {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		return fmt.Errorf("request body too large (max %d bytes)", maxJSONBodyBytes)
+	}
+	return fmt.Errorf("invalid JSON: %w", err)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string, code string) {
@@ -122,8 +132,8 @@ func apiVariantConfigFromStorage(cfg storage.VariantConfig) *VariantConfig {
 		maxTokens := *cfg.MaxTokens
 		out.MaxTokens = &maxTokens
 	}
-	if headers := maps.Clone(cfg.RequestHeaders); len(headers) > 0 {
-		out.RequestHeaders = &headers
+	if headers := apiReplayRequestHeadersFromStorage(cfg.RequestHeaders); headers != nil {
+		out.RequestHeaders = headers
 	}
 	return &out
 }
@@ -164,4 +174,49 @@ func driftResultResponse(result *storage.DriftResult) DriftResult {
 		}
 	}
 	return resp
+}
+
+func apiReplayRequestHeadersFromStorage(headers map[string]string) *ReplayRequestHeaders {
+	if len(headers) == 0 {
+		return nil
+	}
+
+	out := ReplayRequestHeaders{}
+	for key, value := range headers {
+		if value == "" {
+			continue
+		}
+		switch http.CanonicalHeaderKey(key) {
+		case http.CanonicalHeaderKey("X-Freeze-Trace-ID"):
+			out.FreezeTraceId = &value
+		case http.CanonicalHeaderKey("X-Freeze-Span-ID"):
+			out.FreezeSpanId = &value
+		case http.CanonicalHeaderKey("X-Freeze-Step-Index"):
+			out.FreezeStepIndex = &value
+		}
+	}
+
+	if out.FreezeTraceId == nil && out.FreezeSpanId == nil && out.FreezeStepIndex == nil {
+		return nil
+	}
+	return &out
+}
+
+func storageRequestHeadersFromAPI(headers *ReplayRequestHeaders) map[string]string {
+	if headers == nil {
+		return nil
+	}
+
+	raw := map[string]string{}
+	if headers.FreezeTraceId != nil && *headers.FreezeTraceId != "" {
+		raw[http.CanonicalHeaderKey("X-Freeze-Trace-ID")] = *headers.FreezeTraceId
+	}
+	if headers.FreezeSpanId != nil && *headers.FreezeSpanId != "" {
+		raw[http.CanonicalHeaderKey("X-Freeze-Span-ID")] = *headers.FreezeSpanId
+	}
+	if headers.FreezeStepIndex != nil && *headers.FreezeStepIndex != "" {
+		raw[http.CanonicalHeaderKey("X-Freeze-Step-Index")] = *headers.FreezeStepIndex
+	}
+
+	return SanitizeRequestHeaders(raw)
 }

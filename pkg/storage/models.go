@@ -36,13 +36,18 @@ func jsonScan(src any, target any) error {
 
 // PromptMessage represents a single message in a model prompt.
 type PromptMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	Name       string           `json:"name,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []map[string]any `json:"tool_calls,omitempty"`
 }
 
 // PromptContent represents the structured content of an LLM prompt.
 type PromptContent struct {
-	Messages []PromptMessage `json:"messages"`
+	Messages   []PromptMessage   `json:"messages"`
+	Tools      []map[string]any  `json:"tools,omitempty"`
+	ToolChoice any               `json:"tool_choice,omitempty"`
 }
 
 func (p PromptContent) Value() (driver.Value, error) { return jsonValue(p) }

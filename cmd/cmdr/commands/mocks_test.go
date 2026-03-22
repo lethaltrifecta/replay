@@ -172,6 +172,9 @@ func (m *mockStore) CreateAnalysisResult(_ context.Context, _ *storage.AnalysisR
 func (m *mockStore) GetAnalysisResults(_ context.Context, _ uuid.UUID) ([]*storage.AnalysisResult, error) {
 	return nil, nil
 }
+func (m *mockStore) GetLatestAnalysisResults(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*storage.AnalysisResult, error) {
+	return nil, nil
+}
 func (m *mockStore) CreateEvaluator(_ context.Context, _ *storage.Evaluator) error { return nil }
 func (m *mockStore) GetEvaluator(_ context.Context, _ int) (*storage.Evaluator, error) {
 	return nil, nil
