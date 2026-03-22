@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,106 +12,64 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultMigrationDemoPostgresURL = "postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable"
-
-type migrationDemoRunSummary struct {
-	Scenario            string                `json:"scenario"`
-	BaselineTraceID     string                `json:"baseline_trace_id"`
-	SafeReplayTraceID   string                `json:"safe_replay_trace_id"`
-	UnsafeReplayTraceID string                `json:"unsafe_replay_trace_id"`
-	Logs                migrationDemoLogPaths `json:"logs"`
-}
-
-type migrationDemoLogPaths struct {
-	RunLog              string `json:"run_log"`
-	CMDR                string `json:"cmdr"`
-	FreezeMCP           string `json:"freeze_mcp"`
-	MigrationMCP        string `json:"migration_mcp"`
-	MockLLM             string `json:"mock_llm"`
-	CaptureAgentgateway string `json:"capture_agentgateway"`
-	ReplayAgentgateway  string `json:"replay_agentgateway"`
-	SafeVerdict         string `json:"safe_verdict"`
-	UnsafeVerdict       string `json:"unsafe_verdict"`
-}
-
-type migrationDemoReportArtifact struct {
-	GeneratedAt    time.Time                 `json:"generated_at"`
-	ReportDir      string                    `json:"report_dir"`
-	Scenario       string                    `json:"scenario"`
-	JudgeHighlight string                    `json:"judge_highlight"`
-	Summary        *migrationDemoRunSummary  `json:"summary"`
-	Safe           *migrationDemoVerdictInfo `json:"safe"`
-	Unsafe         *migrationDemoVerdictInfo `json:"unsafe"`
-}
-
-type migrationDemoVerdictInfo struct {
-	Label           string                 `json:"label"`
-	TraceID         string                 `json:"trace_id"`
-	FirstDivergence string                 `json:"first_divergence,omitempty"`
-	Comparison      *traceComparisonReport `json:"comparison"`
-}
-
 func runMigrationDemo(cmd *cobra.Command, args []string) error {
+	reportDir, _ := cmd.Flags().GetString("report-dir")
+	pythonBin, _ := cmd.Flags().GetString("python-bin")
+	goBin, _ := cmd.Flags().GetString("go-bin")
+	agwDir, _ := cmd.Flags().GetString("agentgateway-dir")
+	freezeDir, _ := cmd.Flags().GetString("freeze-dir")
 	threshold, _ := cmd.Flags().GetFloat64("threshold")
-	if threshold < 0 || threshold > 1 {
-		return fmt.Errorf("--threshold must be between 0.0 and 1.0, got %.2f", threshold)
-	}
 
-	repoRoot, err := findRepoRootForDemo()
-	if err != nil {
-		return err
-	}
-
-	reportDir, err := resolveMigrationDemoReportDir(cmd, repoRoot)
-	if err != nil {
-		return err
+	if reportDir == "" {
+		reportDir = filepath.Join("artifacts", "migration-demo", time.Now().Format("20060102-150405"))
 	}
 
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
-		return fmt.Errorf("create report dir: %w", err)
+		return fmt.Errorf("failed to create report directory: %w", err)
 	}
 
-	runLogPath := filepath.Join(reportDir, "run.log")
-	runLog, err := os.Create(runLogPath)
-	if err != nil {
-		return fmt.Errorf("create run log: %w", err)
-	}
-	defer runLog.Close()
+	cmd.Printf("Starting full-loop migration demo...\n")
+	cmd.Printf("Artifacts will be saved to: %s\n", reportDir)
 
-	executablePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate current executable: %w", err)
+	harnessArgs := []string{
+		"scripts/test-migration-demo-full-loop.sh",
+	}
+
+	env := os.Environ()
+	env = setEnvValue(env, "REPORT_DIR", reportDir)
+	if pythonBin != "" {
+		env = setEnvValue(env, "PYTHON_BIN", pythonBin)
+	}
+	if goBin != "" {
+		env = setEnvValue(env, "GO_BIN", goBin)
+	}
+	if agwDir != "" {
+		env = setEnvValue(env, "AGENTGATEWAY_DIR", agwDir)
+	}
+	if freezeDir != "" {
+		env = setEnvValue(env, "FREEZE_DIR", freezeDir)
+	}
+
+	if err := runCommandWithStream(cmd, harnessArgs[0], harnessArgs[1:], env); err != nil {
+		return fmt.Errorf("demo harness failed: %w", err)
 	}
 
 	summaryPath := filepath.Join(reportDir, "run-summary.json")
-
-	runCmd := exec.Command(filepath.Join(repoRoot, "scripts", "test-migration-demo-full-loop.sh"))
-	runCmd.Dir = repoRoot
-	runCmd.Env = buildMigrationDemoEnv(cmd, reportDir, executablePath, summaryPath)
-	runCmd.Stdout = io.MultiWriter(cmd.OutOrStdout(), runLog)
-	runCmd.Stderr = io.MultiWriter(cmd.ErrOrStderr(), runLog)
-
-	cmd.Printf("Running migration demo harness...\n")
-	cmd.Printf("Artifacts: %s\n\n", reportDir)
-
-	if err := runCmd.Run(); err != nil {
-		return fmt.Errorf("migration demo harness failed (see %s): %w", runLogPath, err)
+	if !fileExists(summaryPath) {
+		return fmt.Errorf("demo completed but summary file not found at %s", summaryPath)
 	}
 
-	summary, err := loadMigrationDemoRunSummary(summaryPath)
+	summaryData, err := os.ReadFile(summaryPath)
 	if err != nil {
-		return err
-	}
-	if summary.Logs.RunLog == "" {
-		summary.Logs.RunLog = runLogPath
+		return fmt.Errorf("failed to read summary file: %w", err)
 	}
 
-	previousPostgresURL, hadPostgresURL := os.LookupEnv("CMDR_POSTGRES_URL")
-	postgresURL := resolveMigrationDemoPostgresURL()
-	if err := os.Setenv("CMDR_POSTGRES_URL", postgresURL); err != nil {
-		return fmt.Errorf("set CMDR_POSTGRES_URL: %w", err)
+	var summary migrationDemoRunSummary
+	if err := json.Unmarshal(summaryData, &summary); err != nil {
+		return fmt.Errorf("failed to parse summary file: %w", err)
 	}
-	defer restoreEnv("CMDR_POSTGRES_URL", previousPostgresURL, hadPostgresURL)
+
+	cmd.Printf("\nDemo cycle complete. Building comparison reports...\n")
 
 	store, err := connectDB()
 	if err != nil {
@@ -121,12 +77,12 @@ func runMigrationDemo(cmd *cobra.Command, args []string) error {
 	}
 	defer store.Close()
 
-	ctx := context.Background()
-	safeComparison, err := buildTraceComparisonReport(ctx, store, summary.BaselineTraceID, summary.SafeReplayTraceID, threshold)
+	safeComparison, err := buildTraceComparisonReport(context.Background(), store, summary.BaselineTraceID, summary.SafeReplayTraceID, threshold)
 	if err != nil {
 		return fmt.Errorf("build safe comparison: %w", err)
 	}
-	unsafeComparison, err := buildTraceComparisonReport(ctx, store, summary.BaselineTraceID, summary.UnsafeReplayTraceID, threshold)
+
+	unsafeComparison, err := buildTraceComparisonReport(context.Background(), store, summary.BaselineTraceID, summary.UnsafeReplayTraceID, threshold)
 	if err != nil {
 		return fmt.Errorf("build unsafe comparison: %w", err)
 	}
@@ -135,18 +91,18 @@ func runMigrationDemo(cmd *cobra.Command, args []string) error {
 		GeneratedAt:    time.Now().UTC(),
 		ReportDir:      reportDir,
 		Scenario:       "database-migration",
-		JudgeHighlight: migrationJudgeHighlight(summary, unsafeComparison),
-		Summary:        summary,
+		JudgeHighlight: migrationJudgeHighlight(&summary, unsafeComparison),
+		Summary:        &summary,
 		Safe: &migrationDemoVerdictInfo{
 			Label:           "safe-replay",
 			TraceID:         summary.SafeReplayTraceID,
-			FirstDivergence: formatFirstDivergence(safeComparison.Report.FirstDivergence),
+			FirstDivergence: formatFirstDivergence(toStructuredDivergence(safeComparison.Report.FirstDivergence)),
 			Comparison:      safeComparison,
 		},
 		Unsafe: &migrationDemoVerdictInfo{
 			Label:           "unsafe-replay",
 			TraceID:         summary.UnsafeReplayTraceID,
-			FirstDivergence: formatFirstDivergence(unsafeComparison.Report.FirstDivergence),
+			FirstDivergence: formatFirstDivergence(toStructuredDivergence(unsafeComparison.Report.FirstDivergence)),
 			Comparison:      unsafeComparison,
 		},
 	}
@@ -158,141 +114,16 @@ func runMigrationDemo(cmd *cobra.Command, args []string) error {
 
 	markdownArtifactPath := filepath.Join(reportDir, "report.md")
 	if err := os.WriteFile(markdownArtifactPath, []byte(renderMigrationDemoReportMarkdown(artifact)), 0o644); err != nil {
-		return fmt.Errorf("write markdown report: %w", err)
+		return err
 	}
 
-	judgeHighlightPath := filepath.Join(reportDir, "judge-highlight.md")
-	if err := os.WriteFile(judgeHighlightPath, []byte(renderMigrationJudgeHighlightMarkdown(artifact)), 0o644); err != nil {
-		return fmt.Errorf("write judge highlight: %w", err)
-	}
-
-	demoScriptPath := filepath.Join(reportDir, "demo-script.md")
-	if err := os.WriteFile(demoScriptPath, []byte(renderMigrationDemoScriptMarkdown(artifact)), 0o644); err != nil {
-		return fmt.Errorf("write demo script: %w", err)
-	}
-
-	cmd.Printf("\nSaved artifacts:\n")
-	cmd.Printf("  Summary: %s\n", summaryPath)
-	cmd.Printf("  JSON:    %s\n", jsonArtifactPath)
+	cmd.Printf("\nComparison Reports Generated:\n")
+	cmd.Printf("  JSON: %s\n", jsonArtifactPath)
 	cmd.Printf("  Markdown: %s\n", markdownArtifactPath)
-	cmd.Printf("  Highlight: %s\n", judgeHighlightPath)
-	cmd.Printf("  Script:  %s\n", demoScriptPath)
-	cmd.Printf("\nVerdicts:\n")
-	cmd.Printf("  Safe replay:   %s (%.4f)\n", verdictDisplay(safeComparison.Report.Verdict), safeComparison.Report.SimilarityScore)
-	cmd.Printf("  Unsafe replay: %s (%.4f)\n", verdictDisplay(unsafeComparison.Report.Verdict), unsafeComparison.Report.SimilarityScore)
-	if artifact.Unsafe.FirstDivergence != "" {
-		cmd.Printf("  Unsafe first divergence: %s\n", artifact.Unsafe.FirstDivergence)
-	}
 
-	return nil
-}
-
-func findRepoRootForDemo() (string, error) {
-	start, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("get working directory: %w", err)
-	}
-
-	return findRepoRoot(start)
-}
-
-func findRepoRoot(start string) (string, error) {
-	current := start
-
-	for {
-		goMod := filepath.Join(current, "go.mod")
-		harness := filepath.Join(current, "scripts", "test-migration-demo-full-loop.sh")
-		if fileExists(goMod) && fileExists(harness) {
-			return current, nil
-		}
-
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", fmt.Errorf("could not find repo root from %s", start)
-		}
-		current = parent
-	}
-}
-
-func resolveMigrationDemoReportDir(cmd *cobra.Command, repoRoot string) (string, error) {
-	reportDir, _ := cmd.Flags().GetString("report-dir")
-	if reportDir == "" {
-		reportDir = filepath.Join(repoRoot, "artifacts", "migration-demo", time.Now().UTC().Format("20060102-150405"))
-	}
-
-	if !filepath.IsAbs(reportDir) {
-		reportDir = filepath.Join(repoRoot, reportDir)
-	}
-
-	return filepath.Clean(reportDir), nil
-}
-
-func buildMigrationDemoEnv(cmd *cobra.Command, reportDir, executablePath, summaryPath string) []string {
-	env := os.Environ()
-	env = setEnvValue(env, "CMDR_BIN", executablePath)
-	env = setEnvValue(env, "REPORT_SUMMARY_FILE", summaryPath)
-	env = setEnvValue(env, "RUN_LOG_FILE", filepath.Join(reportDir, "run.log"))
-	env = setEnvValue(env, "CMDR_LOG", filepath.Join(reportDir, "cmdr.log"))
-	env = setEnvValue(env, "FREEZE_LOG", filepath.Join(reportDir, "freeze-mcp.log"))
-	env = setEnvValue(env, "MCP_LOG", filepath.Join(reportDir, "migration-mcp.log"))
-	env = setEnvValue(env, "LLM_LOG", filepath.Join(reportDir, "mock-llm.log"))
-	env = setEnvValue(env, "CAPTURE_AGW_LOG", filepath.Join(reportDir, "agentgateway-capture.log"))
-	env = setEnvValue(env, "REPLAY_AGW_LOG", filepath.Join(reportDir, "agentgateway-replay.log"))
-	env = setEnvValue(env, "SAFE_VERDICT_LOG", filepath.Join(reportDir, "safe-verdict.log"))
-	env = setEnvValue(env, "UNSAFE_VERDICT_LOG", filepath.Join(reportDir, "unsafe-verdict.log"))
-	env = setEnvValue(env, "CMDR_POSTGRES_URL", resolveMigrationDemoPostgresURL())
-
-	if pythonBin, _ := cmd.Flags().GetString("python-bin"); pythonBin != "" {
-		env = setEnvValue(env, "PYTHON_BIN", pythonBin)
-	}
-	if goBin, _ := cmd.Flags().GetString("go-bin"); goBin != "" {
-		env = setEnvValue(env, "GO_BIN", goBin)
-	}
-	if agentgatewayDir, _ := cmd.Flags().GetString("agentgateway-dir"); agentgatewayDir != "" {
-		env = setEnvValue(env, "AGENTGATEWAY_DIR", agentgatewayDir)
-	}
-	if freezeDir, _ := cmd.Flags().GetString("freeze-dir"); freezeDir != "" {
-		env = setEnvValue(env, "FREEZE_DIR", freezeDir)
-	}
-
-	return env
-}
-
-func resolveMigrationDemoPostgresURL() string {
-	if value := strings.TrimSpace(os.Getenv("CMDR_POSTGRES_URL")); value != "" {
-		return value
-	}
-	return defaultMigrationDemoPostgresURL
-}
-
-func loadMigrationDemoRunSummary(path string) (*migrationDemoRunSummary, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read run summary: %w", err)
-	}
-
-	var summary migrationDemoRunSummary
-	if err := json.Unmarshal(data, &summary); err != nil {
-		return nil, fmt.Errorf("decode run summary: %w", err)
-	}
-
-	if summary.BaselineTraceID == "" || summary.SafeReplayTraceID == "" || summary.UnsafeReplayTraceID == "" {
-		return nil, fmt.Errorf("run summary missing required trace IDs")
-	}
-
-	return &summary, nil
-}
-
-func writeJSONFile(path string, v interface{}) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal %s: %w", path, err)
-	}
-	data = append(data, '\n')
-
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
+	cmd.Printf("\nFinal Verdicts:\n")
+	cmd.Printf("  Safe Replay:   %s (Similarity: %.4f)\n", verdictDisplay(safeComparison.Report.Verdict), safeComparison.Report.SimilarityScore)
+	cmd.Printf("  Unsafe Replay: %s (Similarity: %.4f)\n", verdictDisplay(unsafeComparison.Report.Verdict), unsafeComparison.Report.SimilarityScore)
 
 	return nil
 }
@@ -300,83 +131,17 @@ func writeJSONFile(path string, v interface{}) error {
 func renderMigrationDemoReportMarkdown(artifact *migrationDemoReportArtifact) string {
 	var builder strings.Builder
 
-	builder.WriteString("# Migration Demo Report\n\n")
-	builder.WriteString(fmt.Sprintf("Generated: `%s`\n\n", artifact.GeneratedAt.Format(time.RFC3339)))
-	builder.WriteString("## Judge Highlight\n\n")
-	builder.WriteString(artifact.JudgeHighlight)
-	builder.WriteString("\n\n")
-	builder.WriteString("## Outcome Summary\n\n")
-	builder.WriteString("- Safe replay: `PASS`\n")
-	builder.WriteString(fmt.Sprintf("- Unsafe replay: `FAIL`\n"))
-	if artifact.Unsafe.FirstDivergence != "" {
-		builder.WriteString(fmt.Sprintf("- First divergence: `%s`\n", artifact.Unsafe.FirstDivergence))
-	}
-	builder.WriteString("- What this proves: the frozen MCP replay path blocked a dangerous tool that was never part of the approved baseline.\n\n")
-	builder.WriteString("## Trace IDs\n\n")
-	builder.WriteString(fmt.Sprintf("- Baseline: `%s`\n", artifact.Summary.BaselineTraceID))
-	builder.WriteString(fmt.Sprintf("- Safe replay: `%s`\n", artifact.Summary.SafeReplayTraceID))
-	builder.WriteString(fmt.Sprintf("- Unsafe replay: `%s`\n\n", artifact.Summary.UnsafeReplayTraceID))
+	builder.WriteString(fmt.Sprintf("# Migration Demo Report: %s\n\n", artifact.Scenario))
+	builder.WriteString(fmt.Sprintf("**Generated at:** %s\n\n", artifact.GeneratedAt.Format(time.RFC1123)))
 
-	builder.WriteString("## Demo Flow\n\n")
-	builder.WriteString("1. Capture a known-good baseline through `agentgateway` with live migration tools.\n")
-	builder.WriteString("2. Replay the same task through `agentgateway -> freeze-mcp` with a safe candidate and show the matching `PASS` verdict.\n")
-	builder.WriteString("3. Replay the same frozen baseline with an unsafe candidate and show the `FAIL` verdict plus first divergence at `drop_table`.\n\n")
-	builder.WriteString("## Verdicts\n\n")
+	builder.WriteString("## Executive Summary\n\n")
+	builder.WriteString(artifact.JudgeHighlight + "\n\n")
+
 	writeMigrationVerdictMarkdown(&builder, artifact.Safe)
 	writeMigrationVerdictMarkdown(&builder, artifact.Unsafe)
 
-	builder.WriteString("## Logs\n\n")
-	builder.WriteString(fmt.Sprintf("- Full run: `%s`\n", artifact.Summary.Logs.RunLog))
-	builder.WriteString(fmt.Sprintf("- CMDR: `%s`\n", artifact.Summary.Logs.CMDR))
-	builder.WriteString(fmt.Sprintf("- freeze-mcp: `%s`\n", artifact.Summary.Logs.FreezeMCP))
-	builder.WriteString(fmt.Sprintf("- migration MCP: `%s`\n", artifact.Summary.Logs.MigrationMCP))
-	builder.WriteString(fmt.Sprintf("- mock LLM: `%s`\n", artifact.Summary.Logs.MockLLM))
-	builder.WriteString(fmt.Sprintf("- capture agentgateway: `%s`\n", artifact.Summary.Logs.CaptureAgentgateway))
-	builder.WriteString(fmt.Sprintf("- replay agentgateway: `%s`\n", artifact.Summary.Logs.ReplayAgentgateway))
-	builder.WriteString(fmt.Sprintf("- safe verdict: `%s`\n", artifact.Summary.Logs.SafeVerdict))
-	builder.WriteString(fmt.Sprintf("- unsafe verdict: `%s`\n", artifact.Summary.Logs.UnsafeVerdict))
-
-	return builder.String()
-}
-
-func renderMigrationJudgeHighlightMarkdown(artifact *migrationDemoReportArtifact) string {
-	var builder strings.Builder
-
-	builder.WriteString("# Judge Highlight\n\n")
-	builder.WriteString(artifact.JudgeHighlight)
-	builder.WriteString("\n\n")
-	builder.WriteString("## Evidence\n\n")
-	builder.WriteString(fmt.Sprintf("- Baseline trace: `%s`\n", artifact.Summary.BaselineTraceID))
-	builder.WriteString(fmt.Sprintf("- Safe replay verdict: `%s`\n", verdictDisplay(artifact.Safe.Comparison.Report.Verdict)))
-	builder.WriteString(fmt.Sprintf("- Unsafe replay verdict: `%s`\n", verdictDisplay(artifact.Unsafe.Comparison.Report.Verdict)))
-	if artifact.Unsafe.FirstDivergence != "" {
-		builder.WriteString(fmt.Sprintf("- First divergence: `%s`\n", artifact.Unsafe.FirstDivergence))
-	}
-	builder.WriteString("\n## Copy-Ready Blurb\n\n")
-	builder.WriteString(artifact.JudgeHighlight)
-	builder.WriteString("\n")
-
-	return builder.String()
-}
-
-func renderMigrationDemoScriptMarkdown(artifact *migrationDemoReportArtifact) string {
-	var builder strings.Builder
-
-	builder.WriteString("# Migration Demo Script\n\n")
-	builder.WriteString("## Setup\n\n")
-	builder.WriteString(fmt.Sprintf("Run: `cmdr demo migration run --report-dir %s`\n\n", artifact.ReportDir))
-	builder.WriteString("## What To Show\n\n")
-	builder.WriteString("1. Show the report directory and point out `report.md`, `judge-highlight.md`, and `demo-script.md`.\n")
-	builder.WriteString(fmt.Sprintf("2. Show the safe replay verdict in `%s` and call out `PASS`.\n", artifact.Summary.Logs.SafeVerdict))
-	builder.WriteString(fmt.Sprintf("3. Show the unsafe replay verdict in `%s` and call out `FAIL`.\n", artifact.Summary.Logs.UnsafeVerdict))
-	builder.WriteString("4. Highlight the first divergence where the unsafe replay changed from `inspect_schema` to `drop_table`.\n")
-	builder.WriteString("5. Explain that the unsafe tool was blocked because `freeze-mcp` had no approved baseline capture for it.\n\n")
-	builder.WriteString("## Talking Points\n\n")
-	builder.WriteString("- `agentgateway` is in the main path for both live capture and replay.\n")
-	builder.WriteString("- CMDR stores the baseline and candidate traces, then compares their tool behavior and risk profile.\n")
-	builder.WriteString("- `freeze-mcp` keeps the tool environment fixed, so the demo isolates model behavior instead of infrastructure drift.\n")
-	builder.WriteString("- The safe replay shows that acceptable candidates can still pass in the frozen environment.\n\n")
-	builder.WriteString("## Screenshot Checklist\n\n")
+	builder.WriteString("## Artifacts\n\n")
+	builder.WriteString(fmt.Sprintf("- `report.json`: `%s`\n", filepath.Join(artifact.ReportDir, "report.json")))
 	builder.WriteString(fmt.Sprintf("- `report.md`: `%s`\n", filepath.Join(artifact.ReportDir, "report.md")))
 	builder.WriteString(fmt.Sprintf("- safe verdict log: `%s`\n", artifact.Summary.Logs.SafeVerdict))
 	builder.WriteString(fmt.Sprintf("- unsafe verdict log: `%s`\n", artifact.Summary.Logs.UnsafeVerdict))
@@ -388,7 +153,7 @@ func renderMigrationDemoScriptMarkdown(artifact *migrationDemoReportArtifact) st
 func migrationJudgeHighlight(summary *migrationDemoRunSummary, unsafeComparison *traceComparisonReport) string {
 	highlight := "CMDR captured an approved database migration through agentgateway, replayed the same task against a frozen MCP environment, and blocked an unsafe candidate when it diverged from the approved baseline."
 	if unsafeComparison != nil {
-		if divergence := formatFirstDivergence(unsafeComparison.Report.FirstDivergence); divergence != "" {
+		if divergence := formatFirstDivergence(toStructuredDivergence(unsafeComparison.Report.FirstDivergence)); divergence != "" {
 			highlight = fmt.Sprintf("%s In the failing replay, the first divergence was %s.", highlight, divergence)
 		}
 	}
@@ -412,23 +177,6 @@ func writeMigrationVerdictMarkdown(builder *strings.Builder, verdict *migrationD
 		verdict.Comparison.CandidateToolCount,
 		displayTraceToolSource(verdict.Comparison.CandidateToolSource),
 	))
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
-func setEnvValue(env []string, key, value string) []string {
-	prefix := key + "="
-	for i, item := range env {
-		if strings.HasPrefix(item, prefix) {
-			env[i] = prefix + value
-			return env
-		}
-	}
-
-	return append(env, prefix+value)
 }
 
 func restoreEnv(key, value string, hadValue bool) {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"time"
 
 	"github.com/lethaltrifecta/replay/pkg/replay"
 	"github.com/lethaltrifecta/replay/pkg/storage"
@@ -29,11 +30,25 @@ type Server struct {
 	cancel     context.CancelFunc
 }
 
+func isNilCompleter(completer replay.Completer) bool {
+	if completer == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(completer)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 // NewServer creates a new API server.
 func NewServer(cfg ServerConfig, store storage.Storage, completer replay.Completer, log *logger.Logger) *Server {
 	// Normalize typed nil to untyped nil so s.completer == nil works reliably.
 	// In Go, a nil *ConcreteType stored in an interface is non-nil.
-	if completer != nil && reflect.ValueOf(completer).IsNil() {
+	if isNilCompleter(completer) {
 		completer = nil
 	}
 
@@ -48,15 +63,16 @@ func NewServer(cfg ServerConfig, store storage.Storage, completer replay.Complet
 		cancel:    cancel,
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/v1/gate/check", s.handleGateCheck)
-	mux.HandleFunc("GET /api/v1/gate/status/{id}", s.handleGateStatus)
-	mux.HandleFunc("GET /api/v1/gate/report/{id}", s.handleGateReport)
-	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	h := HandlerWithOptions(s, StdHTTPServerOptions{
+		BaseURL: "/api/v1",
+	})
 
 	s.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: mux,
+		Addr:         fmt.Sprintf(":%d", cfg.Port),
+		Handler:      h,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	return s
@@ -74,6 +90,7 @@ func (s *Server) Start() error {
 
 // Shutdown gracefully stops the server and cancels any in-flight pipelines.
 func (s *Server) Shutdown(ctx context.Context) error {
+	err := s.httpServer.Shutdown(ctx)
 	s.cancel()
-	return s.httpServer.Shutdown(ctx)
+	return err
 }

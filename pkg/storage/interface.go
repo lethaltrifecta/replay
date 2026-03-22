@@ -2,9 +2,20 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+)
+
+var (
+	ErrNotFound                = errors.New("resource not found")
+	ErrTraceNotFound           = errors.New("trace not found")
+	ErrBaselineNotFound        = errors.New("baseline not found")
+	ErrExperimentNotFound      = errors.New("experiment not found")
+	ErrEvaluationRunNotFound   = errors.New("evaluation run not found")
+	ErrHumanEvaluationNotFound = errors.New("human evaluation not found")
+	ErrGroundTruthNotFound     = errors.New("ground truth not found")
 )
 
 // Storage defines the interface for all storage operations
@@ -20,6 +31,7 @@ type Storage interface {
 	CreateReplayTrace(ctx context.Context, trace *ReplayTrace) error
 	GetReplayTraceSpans(ctx context.Context, traceID string) ([]*ReplayTrace, error)
 	ListReplayTraces(ctx context.Context, filters TraceFilters) ([]*ReplayTrace, error)
+	ListUniqueTraces(ctx context.Context, filters TraceFilters) ([]*TraceSummary, error)
 
 	// Atomic ingestion batch — all three tables in a single transaction
 	CreateIngestionBatch(ctx context.Context, otels []*OTELTrace, replays []*ReplayTrace, tools []*ToolCapture) (IngestCounts, error)
@@ -44,6 +56,7 @@ type Storage interface {
 	// Analysis Results
 	CreateAnalysisResult(ctx context.Context, result *AnalysisResult) error
 	GetAnalysisResults(ctx context.Context, experimentID uuid.UUID) ([]*AnalysisResult, error)
+	GetLatestAnalysisResults(ctx context.Context, experimentIDs []uuid.UUID) (map[uuid.UUID]*AnalysisResult, error)
 
 	// Evaluators
 	CreateEvaluator(ctx context.Context, evaluator *Evaluator) error
@@ -90,7 +103,8 @@ type Storage interface {
 	GetDriftResults(ctx context.Context, traceID string) ([]*DriftResult, error)
 	GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string, limit int) ([]*DriftResult, error)
 	GetLatestDriftResult(ctx context.Context, traceID string) (*DriftResult, error)
-	ListDriftResults(ctx context.Context, limit int) ([]*DriftResult, error)
+	GetDriftResultForPair(ctx context.Context, traceID string, baselineTraceID string) (*DriftResult, error)
+	ListDriftResults(ctx context.Context, limit int, offset int) ([]*DriftResult, error)
 	HasDriftResultForBaseline(ctx context.Context, traceID string, baselineTraceID string) (bool, error)
 }
 

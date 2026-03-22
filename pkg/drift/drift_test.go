@@ -606,6 +606,24 @@ func TestCompare_RiskEscalation(t *testing.T) {
 	assert.Equal(t, true, riskDetails["escalation"])
 }
 
+func TestStructuredDetails_UsesRiskEscalationSummary(t *testing.T) {
+	report := &DriftReport{
+		Score:   0.8,
+		Verdict: storage.DriftVerdictFail,
+		Details: map[string]interface{}{
+			"risk_details": map[string]interface{}{
+				"escalation": true,
+			},
+		},
+	}
+
+	details := StructuredDetails(report)
+
+	assert.Equal(t, "risk escalation detected", details.Reason)
+	assert.True(t, details.RiskEscalation)
+	assert.Nil(t, details.DivergenceStep)
+}
+
 func TestCompare_TokenJitterOnly(t *testing.T) {
 	baseline := &Fingerprint{
 		TraceID:       "base",

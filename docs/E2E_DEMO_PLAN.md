@@ -102,7 +102,7 @@ Writes a self-contained artifact bundle with logs, results, report, and demo scr
 
 ```bash
 cmdr demo seed
-cmdr drift check demo-drifted-002 --baseline demo-baseline-001
+cmdr drift check demo-baseline-001 demo-drifted-002
 cmdr demo gate --baseline demo-baseline-001 --model gpt-4o-danger   # exits 1
 cmdr demo gate --baseline demo-baseline-001 --model claude-3-5-sonnet  # exits 0
 ```

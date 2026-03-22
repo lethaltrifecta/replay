@@ -11,20 +11,15 @@ import (
 // Baseline methods
 
 // MarkTraceAsBaseline marks a trace as a known-good baseline.
-// Validates the trace exists in replay_traces first.
-// If the trace is already a baseline, updates name/description.
-func (s *PostgresStorage) MarkTraceAsBaseline(ctx context.Context, baseline *Baseline) error {
+func (s *PostgresStorage) MarkTraceAsBaseline(ctx context.Context, b *Baseline) error {
 	// Validate trace exists
 	var exists bool
-	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM replay_traces WHERE trace_id = $1)`,
-		baseline.TraceID,
-	).Scan(&exists)
+	err := s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM replay_traces WHERE trace_id = $1)", b.TraceID).Scan(&exists)
 	if err != nil {
-		return fmt.Errorf("failed to check trace existence: %w", err)
+		return err
 	}
 	if !exists {
-		return fmt.Errorf("trace not found: %s", baseline.TraceID)
+		return ErrTraceNotFound
 	}
 
 	query := `
@@ -35,10 +30,7 @@ func (s *PostgresStorage) MarkTraceAsBaseline(ctx context.Context, baseline *Bas
 			description = COALESCE(EXCLUDED.description, baselines.description)
 		RETURNING id, created_at
 	`
-
-	return s.pool.QueryRow(ctx, query,
-		baseline.TraceID, baseline.Name, baseline.Description,
-	).Scan(&baseline.ID, &baseline.CreatedAt)
+	return s.pool.QueryRow(ctx, query, b.TraceID, b.Name, b.Description).Scan(&b.ID, &b.CreatedAt)
 }
 
 // GetBaseline retrieves a baseline by trace ID.
@@ -55,7 +47,7 @@ func (s *PostgresStorage) GetBaseline(ctx context.Context, traceID string) (*Bas
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("baseline not found: %s", traceID)
+		return nil, ErrBaselineNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -64,7 +56,7 @@ func (s *PostgresStorage) GetBaseline(ctx context.Context, traceID string) (*Bas
 	return &b, nil
 }
 
-// ListBaselines returns all baselines ordered by creation time (newest first).
+// ListBaselines returns all approved baselines.
 func (s *PostgresStorage) ListBaselines(ctx context.Context) ([]*Baseline, error) {
 	query := `
 		SELECT id, trace_id, name, description, created_at
@@ -78,67 +70,53 @@ func (s *PostgresStorage) ListBaselines(ctx context.Context) ([]*Baseline, error
 	}
 	defer rows.Close()
 
-	var baselines []*Baseline
+	var results []*Baseline
 	for rows.Next() {
 		var b Baseline
 		err := rows.Scan(&b.ID, &b.TraceID, &b.Name, &b.Description, &b.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
-		baselines = append(baselines, &b)
+		results = append(results, &b)
 	}
 
-	return baselines, rows.Err()
+	return results, rows.Err()
 }
 
-// UnmarkBaseline removes a baseline by trace ID.
-// Returns an error if no baseline exists for the given trace.
+// UnmarkBaseline removes a baseline.
 func (s *PostgresStorage) UnmarkBaseline(ctx context.Context, traceID string) error {
-	result, err := s.pool.Exec(ctx,
-		`DELETE FROM baselines WHERE trace_id = $1`, traceID,
-	)
+	tag, err := s.pool.Exec(ctx, "DELETE FROM baselines WHERE trace_id = $1", traceID)
 	if err != nil {
 		return err
 	}
-
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("baseline not found: %s", traceID)
+	if tag.RowsAffected() == 0 {
+		return ErrBaselineNotFound
 	}
-
 	return nil
 }
 
 // Drift Result methods
 
-// CreateDriftResult stores a drift comparison result.
-// Defaults verdict to "pending" if empty and validates drift_score is in [0, 1].
-func (s *PostgresStorage) CreateDriftResult(ctx context.Context, result *DriftResult) error {
-	if result.Verdict == "" {
-		result.Verdict = DriftVerdictPending
-	}
-	if result.DriftScore < 0 || result.DriftScore > 1 {
-		return fmt.Errorf("drift_score must be between 0 and 1, got %f", result.DriftScore)
+// CreateDriftResult saves a new drift calculation.
+func (s *PostgresStorage) CreateDriftResult(ctx context.Context, r *DriftResult) error {
+	if r.DriftScore < 0 || r.DriftScore > 1 {
+		return fmt.Errorf("drift_score must be between 0 and 1, got %f", r.DriftScore)
 	}
 
 	query := `
-		INSERT INTO drift_results (trace_id, baseline_trace_id, drift_score, verdict, details)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (trace_id, baseline_trace_id) DO NOTHING
+		INSERT INTO drift_results (trace_id, baseline_trace_id, drift_score, verdict, details, created_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())
+		ON CONFLICT (trace_id, baseline_trace_id) DO UPDATE SET
+			drift_score = EXCLUDED.drift_score,
+			verdict = EXCLUDED.verdict,
+			details = EXCLUDED.details,
+			created_at = NOW()
 		RETURNING id, created_at
 	`
-
-	err := s.pool.QueryRow(ctx, query,
-		result.TraceID, result.BaselineTraceID, result.DriftScore, result.Verdict, result.Details,
-	).Scan(&result.ID, &result.CreatedAt)
-
-	// ON CONFLICT DO NOTHING returns no rows — treat duplicate as success
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	return err
+	return s.pool.QueryRow(ctx, query, r.TraceID, r.BaselineTraceID, r.DriftScore, r.Verdict, r.Details).Scan(&r.ID, &r.CreatedAt)
 }
 
-// GetDriftResults retrieves all drift results for a trace ID (newest first).
+// GetDriftResults retrieves all drift results for a trace.
 func (s *PostgresStorage) GetDriftResults(ctx context.Context, traceID string) ([]*DriftResult, error) {
 	query := `
 		SELECT id, trace_id, baseline_trace_id, drift_score, verdict, details, created_at
@@ -168,8 +146,7 @@ func (s *PostgresStorage) GetDriftResults(ctx context.Context, traceID string) (
 	return results, rows.Err()
 }
 
-// GetDriftResultsByBaseline retrieves drift results for a baseline trace ID (newest first).
-// When limit > 0, at most limit rows are returned. When limit is 0, all rows are returned.
+// GetDriftResultsByBaseline retrieves drift results for candidates checked against a specific baseline.
 func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselineTraceID string, limit int) ([]*DriftResult, error) {
 	query := `
 		SELECT id, trace_id, baseline_trace_id, drift_score, verdict, details, created_at
@@ -177,7 +154,6 @@ func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselin
 		WHERE baseline_trace_id = $1
 		ORDER BY created_at DESC, id DESC
 	`
-
 	args := []interface{}{baselineTraceID}
 	if limit > 0 {
 		query += " LIMIT $2"
@@ -206,8 +182,7 @@ func (s *PostgresStorage) GetDriftResultsByBaseline(ctx context.Context, baselin
 }
 
 // ListDriftResults returns the most recent drift results across all traces.
-// When limit > 0, at most limit rows are returned. When limit is 0, all rows are returned.
-func (s *PostgresStorage) ListDriftResults(ctx context.Context, limit int) ([]*DriftResult, error) {
+func (s *PostgresStorage) ListDriftResults(ctx context.Context, limit int, offset int) ([]*DriftResult, error) {
 	query := `
 		SELECT id, trace_id, baseline_trace_id, drift_score, verdict, details, created_at
 		FROM drift_results
@@ -215,9 +190,15 @@ func (s *PostgresStorage) ListDriftResults(ctx context.Context, limit int) ([]*D
 	`
 
 	var args []interface{}
+	argNum := 1
 	if limit > 0 {
-		query += " LIMIT $1"
+		query += fmt.Sprintf(" LIMIT $%d", argNum)
 		args = append(args, limit)
+		argNum++
+	}
+	if offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", argNum)
+		args = append(args, offset)
 	}
 
 	rows, err := s.pool.Query(ctx, query, args...)
@@ -241,6 +222,31 @@ func (s *PostgresStorage) ListDriftResults(ctx context.Context, limit int) ([]*D
 	return results, rows.Err()
 }
 
+// GetDriftResultForPair retrieves a specific drift result for a trace/baseline pair.
+func (s *PostgresStorage) GetDriftResultForPair(ctx context.Context, traceID string, baselineTraceID string) (*DriftResult, error) {
+	query := `
+		SELECT id, trace_id, baseline_trace_id, drift_score, verdict, details, created_at
+		FROM drift_results
+		WHERE trace_id = $1 AND baseline_trace_id = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`
+
+	var r DriftResult
+	err := s.pool.QueryRow(ctx, query, traceID, baselineTraceID).Scan(
+		&r.ID, &r.TraceID, &r.BaselineTraceID, &r.DriftScore, &r.Verdict, &r.Details, &r.CreatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &r, nil
+}
+
 // GetLatestDriftResult retrieves the most recent drift result for a trace ID.
 func (s *PostgresStorage) GetLatestDriftResult(ctx context.Context, traceID string) (*DriftResult, error) {
 	query := `
@@ -257,7 +263,7 @@ func (s *PostgresStorage) GetLatestDriftResult(ctx context.Context, traceID stri
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("no drift results found for trace: %s", traceID)
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -266,17 +272,14 @@ func (s *PostgresStorage) GetLatestDriftResult(ctx context.Context, traceID stri
 	return &r, nil
 }
 
-// HasDriftResultForBaseline checks whether a drift result exists for a specific
-// (trace_id, baseline_trace_id) pair. Returns (false, nil) when no result exists,
-// distinguishing "not found" from actual DB errors.
+// HasDriftResultForBaseline checks if a comparison exists for this pair.
 func (s *PostgresStorage) HasDriftResultForBaseline(ctx context.Context, traceID string, baselineTraceID string) (bool, error) {
 	var exists bool
-	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM drift_results WHERE trace_id = $1 AND baseline_trace_id = $2)`,
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM drift_results WHERE trace_id = $1 AND baseline_trace_id = $2)`,
 		traceID, baselineTraceID,
 	).Scan(&exists)
 	if err != nil {
-		return false, fmt.Errorf("failed to check drift result existence: %w", err)
+		return false, err
 	}
 	return exists, nil
 }

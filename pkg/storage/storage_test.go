@@ -1,3 +1,5 @@
+//go:build integration
+
 package storage
 
 import (
@@ -138,6 +140,51 @@ func TestPostgresStorage_ReplayTraces(t *testing.T) {
 	assert.Len(t, traces, 2)
 }
 
+func TestPostgresStorage_ListReplayTraces_StablePaginationOnEqualCreatedAt(t *testing.T) {
+	storage := setupTestDB(t)
+	defer teardownTestDB(t, storage)
+
+	ctx := context.Background()
+	createdAt := time.Date(2026, time.March, 22, 12, 0, 0, 0, time.UTC)
+
+	inserted := make([]*ReplayTrace, 0, 3)
+	for i := 0; i < 3; i++ {
+		trace := &ReplayTrace{
+			TraceID:          fmt.Sprintf("trace-stable-%d", i),
+			SpanID:           fmt.Sprintf("span-stable-%d", i),
+			RunID:            fmt.Sprintf("run-stable-%d", i),
+			StepIndex:        0,
+			CreatedAt:        createdAt,
+			Provider:         "anthropic",
+			Model:            "claude-3-5-sonnet-20241022",
+			Prompt:           JSONB{"messages": []interface{}{map[string]string{"role": "user", "content": "Hello"}}},
+			Completion:       "Hi there!",
+			Parameters:       JSONB{"temperature": 0.7},
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+			LatencyMS:        100,
+		}
+		require.NoError(t, storage.CreateReplayTrace(ctx, trace))
+		inserted = append(inserted, trace)
+	}
+
+	pageOne, err := storage.ListReplayTraces(ctx, TraceFilters{Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, pageOne, 1)
+	assert.Equal(t, inserted[2].ID, pageOne[0].ID)
+
+	pageTwo, err := storage.ListReplayTraces(ctx, TraceFilters{Limit: 1, Offset: 1})
+	require.NoError(t, err)
+	require.Len(t, pageTwo, 1)
+	assert.Equal(t, inserted[1].ID, pageTwo[0].ID)
+
+	pageThree, err := storage.ListReplayTraces(ctx, TraceFilters{Limit: 1, Offset: 2})
+	require.NoError(t, err)
+	require.Len(t, pageThree, 1)
+	assert.Equal(t, inserted[0].ID, pageThree[0].ID)
+}
+
 func TestPostgresStorage_ToolCaptures(t *testing.T) {
 	storage := setupTestDB(t)
 	defer teardownTestDB(t, storage)
@@ -198,14 +245,19 @@ func TestPostgresStorage_Experiments(t *testing.T) {
 
 	// Create an experiment (baseline_trace_id is a logical reference, no FK)
 	expID := uuid.New()
+	threshold := 0.75
 	exp := &Experiment{
 		ID:              expID,
 		Name:            "Test Experiment",
 		BaselineTraceID: "trace-789",
 		Status:          StatusPending,
 		Progress:        0.0,
-		Config:          JSONB{"variants": []string{"model1", "model2"}},
-		CreatedAt:       time.Now(),
+		Config: ExperimentConfig{
+			Model:     "model1",
+			Provider:  "openai",
+			Threshold: &threshold,
+		},
+		CreatedAt: time.Now(),
 	}
 
 	err := storage.CreateExperiment(ctx, exp)

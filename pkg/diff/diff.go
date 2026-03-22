@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -332,21 +333,124 @@ func excerpt(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// ToAnalysisResult maps a Report into a storage.AnalysisResult for persistence.
-func ToAnalysisResult(report *Report, experimentID, baselineRunID, candidateRunID uuid.UUID) *storage.AnalysisResult {
-	behaviorDiff := storage.JSONB{
-		"step_count":       report.StepCount,
-		"step_diffs":       report.StepDiffs,
-		"verdict":          report.Verdict,
-		"similarity_score": report.SimilarityScore,
+// StructuredFirstDivergence normalizes the dynamic first-divergence payload from
+// CompareAll into the typed storage shape used by persistence, APIs, and CLI output.
+func StructuredFirstDivergence(raw storage.JSONB) storage.FirstDivergence {
+	if len(raw) == 0 {
+		return storage.FirstDivergence{}
 	}
 
-	safetyDiff := storage.JSONB{}
+	var divergence storage.FirstDivergence
+	if idx, ok := jsonInt(raw["step_index"]); ok {
+		divergence.StepIndex = &idx
+	}
+	if idx, ok := jsonInt(raw["tool_index"]); ok {
+		divergence.ToolIndex = &idx
+	}
+	if v, ok := raw["type"].(string); ok {
+		divergence.Type = v
+	}
+	if v, ok := raw["baseline"].(string); ok {
+		divergence.Baseline = v
+	}
+	if v, ok := raw["variant"].(string); ok {
+		divergence.Variant = v
+	}
+	if v, ok := raw["baseline_excerpt"].(string); ok {
+		divergence.BaselineExcerpt = v
+	}
+	if v, ok := raw["variant_excerpt"].(string); ok {
+		divergence.VariantExcerpt = v
+	}
+	if v, ok := jsonInt(raw["baseline_count"]); ok {
+		divergence.BaselineCount = &v
+	}
+	if v, ok := jsonInt(raw["variant_count"]); ok {
+		divergence.VariantCount = &v
+	}
+	if v, ok := jsonInt(raw["baseline_steps"]); ok {
+		divergence.BaselineSteps = &v
+	}
+	if v, ok := jsonInt(raw["variant_steps"]); ok {
+		divergence.VariantSteps = &v
+	}
+
+	return divergence
+}
+
+func jsonInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float32:
+		return int(math.Round(float64(n))), true
+	case float64:
+		return int(math.Round(n)), true
+	default:
+		return 0, false
+	}
+}
+
+func dominantRiskClass(v any) string {
+	var fractions map[string]float64
+	switch typed := v.(type) {
+	case map[string]float64:
+		fractions = typed
+	case storage.JSONB:
+		fractions = make(map[string]float64, len(typed))
+		for key, value := range typed {
+			if score, ok := value.(float64); ok {
+				fractions[key] = score
+			}
+		}
+	case map[string]interface{}:
+		fractions = make(map[string]float64, len(typed))
+		for key, value := range typed {
+			if score, ok := value.(float64); ok {
+				fractions[key] = score
+			}
+		}
+	default:
+		return ""
+	}
+
+	best := ""
+	bestScore := 0.0
+	riskOrder := []string{
+		storage.RiskClassDestructive,
+		storage.RiskClassWrite,
+		storage.RiskClassRead,
+	}
+	for _, risk := range riskOrder {
+		score, ok := fractions[risk]
+		if !ok || score <= 0 {
+			continue
+		}
+		if score > bestScore {
+			best = risk
+			bestScore = score
+		}
+	}
+	return best
+}
+
+// ToAnalysisResult maps a Report into a storage.AnalysisResult for persistence.
+func ToAnalysisResult(report *Report, experimentID, baselineRunID, candidateRunID uuid.UUID) *storage.AnalysisResult {
+	behaviorDiff := storage.BehaviorDiff{
+		Verdict: report.Verdict,
+		Reason:  fmt.Sprintf("Score: %.2f", report.SimilarityScore),
+	}
+
+	var safetyDiff storage.SafetyDiff
 	if report.RiskScore != nil {
-		safetyDiff = storage.JSONB{
-			"score":      report.RiskScore.Score,
-			"escalation": report.RiskScore.Escalation,
-			"details":    report.RiskScore.Details,
+		safetyDiff.RiskEscalation = report.RiskScore.Escalation
+		if report.RiskScore.Details != nil {
+			safetyDiff.BaselineRisk = dominantRiskClass(report.RiskScore.Details["baseline_fractions"])
+			safetyDiff.VariantRisk = dominantRiskClass(report.RiskScore.Details["candidate_fractions"])
 		}
 	}
 
@@ -362,10 +466,7 @@ func ToAnalysisResult(report *Report, experimentID, baselineRunID, candidateRunI
 		qualityMetrics["tool_call_score"] = report.ToolCallScore.Score
 	}
 
-	firstDivergence := storage.JSONB{}
-	if report.FirstDivergence != nil && len(report.FirstDivergence) > 0 {
-		firstDivergence = report.FirstDivergence
-	}
+	firstDivergence := StructuredFirstDivergence(report.FirstDivergence)
 
 	return &storage.AnalysisResult{
 		ExperimentID:    experimentID,

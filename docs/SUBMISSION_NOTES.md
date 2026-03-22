@@ -62,8 +62,8 @@ These are practical, day-one problems. The CLI is CI/CD friendly (`exit 0` = pas
 ## Demo Narrative (What Judges See)
 
 1. **Capture**: An agent runs through agentgateway. CMDR silently captures every LLM call and tool call.
-2. **Baseline**: Mark this trace as "known-good" — `cmdr drift baseline set <id>`.
-3. **Drift detection**: Agent runs again with a different model. `cmdr drift check` shows the behavioral fingerprint changed — tool call frequency shifted, risk class escalated from read to write.
+2. **Baseline**: Use an approved baseline trace captured earlier, or the seeded demo baseline `demo-baseline-001`.
+3. **Drift detection**: Agent runs again with a different model. `cmdr drift check <baseline-id> <candidate-id>` shows the behavioral fingerprint changed — tool call frequency shifted, risk class escalated from read to write.
 4. **Deployment gate**: Before deploying the new model, run `cmdr gate check --baseline <id> --model gpt-4o-mini`. The gate replays the baseline scenario with frozen tools and reports: "FAIL — variant called destructive tool not in baseline."
 5. **Deploy safely**: Fix the prompt, re-run the gate. It passes. Ship with confidence.
 

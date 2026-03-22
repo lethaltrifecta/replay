@@ -1,9 +1,14 @@
-.PHONY: help build test test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset
+.PHONY: help build build-all test test-all test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset generate
 
 # Binary name
 BINARY_NAME=cmdr
 VERSION?=0.1.0
 BUILD_DIR=bin
+
+# Tools
+OAPI_CODEGEN_VERSION=v2.6.0
+OAPI_CODEGEN=go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
+OPENAPI_TS_CODEGEN_VERSION=0.29.0
 
 # Go parameters
 GOCMD=go
@@ -24,7 +29,7 @@ help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Available targets:'
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 # ============================================================================
 # Development
@@ -42,7 +47,7 @@ dev-up: ## Start development services (PostgreSQL, Jaeger)
 	@sleep 3
 	@echo "✅ Development services started"
 	@echo "   - PostgreSQL: localhost:5432"
-	@echo "   - Jaeger UI:  http://localhost:16686"
+	@echo "   - Jaeger UI: http://localhost:16686"
 
 dev-down: ## Stop development services
 	@echo "Stopping development services..."
@@ -51,10 +56,22 @@ dev-down: ## Stop development services
 dev-reset: ## Reset development database
 	@echo "Resetting development database..."
 	$(DOCKER_COMPOSE) down -v
-	$(DOCKER_COMPOSE) up -d postgres
+	$(DOCKER_COMPOSE) up -d postgres jaeger
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 3
-	@echo "✅ Database reset complete"
+	@echo "✅ Development services reset complete"
+
+generate: ## Generate code from OpenAPI spec
+	@echo "Generating OpenAPI code..."
+	@mkdir -p pkg/api
+	@mkdir -p pkg/apiclient
+	@mkdir -p ui/packages/api
+	$(OAPI_CODEGEN) -config api/oapi-server.cfg.yaml api/openapi.yaml
+	$(OAPI_CODEGEN) -config api/oapi-client.cfg.yaml api/openapi.yaml
+	bash scripts/generate-openapi-ts.sh "$(OPENAPI_TS_CODEGEN_VERSION)" api/openapi.yaml ui/packages/api
+	@echo "✅ Generated pkg/api/openapi_generated.gen.go"
+	@echo "✅ Generated pkg/apiclient/client.gen.go"
+	@echo "✅ Generated ui/packages/api"
 
 # ============================================================================
 # Build
@@ -64,6 +81,8 @@ build: ## Build the binary
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
 	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/cmdr
+
+build-all: generate build ## Regenerate API code and build the binary
 
 run: build ## Build and run the service
 	@echo "Running $(BINARY_NAME)..."
@@ -76,22 +95,18 @@ run: build ## Build and run the service
 
 test: ## Run unit tests
 	@echo "Running unit tests..."
-	@if [ ! -f .env ]; then echo "⚠️  Warning: .env file not found for test config"; fi
-	@set -a; [ -f .env ] && . ./.env; set +a; \
-	$(GOTEST) -run '^$$' ./pkg/...; \
-	TEST_PKGS=$$(go list -f '{{if or (gt (len .TestGoFiles) 0) (gt (len .XTestGoFiles) 0)}}{{.ImportPath}}{{end}}' ./pkg/... | xargs); \
-	$(GOTEST) -v -race -coverprofile=coverage.out $$TEST_PKGS
+	@$(GOTEST) -v ./pkg/... ./cmd/...
+
+test-all: generate test ## Regenerate API code and run unit tests
 
 test-storage: dev-up ## Run storage tests with real PostgreSQL
 	@echo "Running storage tests..."
-	@CMDR_POSTGRES_URL=postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable $(GOTEST) -v ./pkg/storage/...
+	@CMDR_POSTGRES_URL=postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable $(GOTEST) -v -tags=integration ./pkg/storage/...
 
 test-integration: ## Run integration tests
-	@echo "Running integration tests..."
 	$(GOTEST) -v -tags=integration ./test/integration/...
 
 test-e2e: ## Run end-to-end tests
-	@echo "Running e2e tests..."
 	$(MAKE) test-e2e-freeze-contract
 	$(MAKE) test-e2e-replay-freeze
 
@@ -111,18 +126,12 @@ test-migration-demo-full-loop: ## Run the database migration full-loop demo harn
 	@echo "Running database migration full-loop demo..."
 	./scripts/test-migration-demo-full-loop.sh
 
-coverage: test ## Generate coverage report
-	@echo "Generating coverage report..."
-	$(GOCMD) tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report generated: coverage.html"
-
 # ============================================================================
 # Code Quality
 # ============================================================================
 
 lint: ## Run linter
 	@echo "Running linter..."
-	@which golangci-lint > /dev/null || (echo "golangci-lint not installed. Run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin" && exit 1)
 	golangci-lint run ./...
 
 fmt: ## Format code
@@ -138,11 +147,6 @@ clean: ## Clean build artifacts
 	$(GOCLEAN)
 	rm -rf $(BUILD_DIR)
 	rm -f coverage.out coverage.html
-
-deps: ## Download dependencies
-	@echo "Downloading dependencies..."
-	$(GOMOD) download
-	$(GOMOD) tidy
 
 # ============================================================================
 # Docker

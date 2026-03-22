@@ -84,7 +84,7 @@ func (m *mockStorage) GetExperiment(_ context.Context, id uuid.UUID) (*storage.E
 	if e, ok := m.experiments[id]; ok {
 		return e, nil
 	}
-	return nil, errors.New("not found")
+	return nil, storage.ErrExperimentNotFound
 }
 
 func (m *mockStorage) CreateExperimentRun(_ context.Context, run *storage.ExperimentRun) error {
@@ -112,7 +112,7 @@ func (m *mockStorage) GetExperimentRun(_ context.Context, id uuid.UUID) (*storag
 	if r, ok := m.experimentRuns[id]; ok {
 		return r, nil
 	}
-	return nil, errors.New("not found")
+	return nil, storage.ErrNotFound
 }
 
 func (m *mockStorage) CreateReplayTrace(_ context.Context, trace *storage.ReplayTrace) error {
@@ -129,10 +129,16 @@ func (m *mockStorage) CreateAnalysisResult(_ context.Context, result *storage.An
 
 // Stub remaining Storage interface methods (not exercised by engine tests)
 
-func (m *mockStorage) Close() error                                                  { return nil }
-func (m *mockStorage) Ping(_ context.Context) error                                  { return nil }
-func (m *mockStorage) Migrate(_ context.Context) error                               { return nil }
-func (m *mockStorage) CreateOTELTrace(_ context.Context, _ *storage.OTELTrace) error { return nil }
+func (m *mockStorage) Close() error                    { return nil }
+func (m *mockStorage) Ping(_ context.Context) error    { return nil }
+func (m *mockStorage) Migrate(_ context.Context) error { return nil }
+func (m *mockStorage) ListUniqueTraces(_ context.Context, _ storage.TraceFilters) ([]*storage.TraceSummary, error) {
+	return nil, nil
+}
+func (m *mockStorage) CreateOTELTrace(_ context.Context, _ *storage.OTELTrace) error {
+	return nil
+}
+
 func (m *mockStorage) GetOTELTraceSpans(_ context.Context, _ string) ([]*storage.OTELTrace, error) {
 	return nil, nil
 }
@@ -156,6 +162,9 @@ func (m *mockStorage) ListExperimentRuns(_ context.Context, _ uuid.UUID) ([]*sto
 	return nil, nil
 }
 func (m *mockStorage) GetAnalysisResults(_ context.Context, _ uuid.UUID) ([]*storage.AnalysisResult, error) {
+	return nil, nil
+}
+func (m *mockStorage) GetLatestAnalysisResults(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*storage.AnalysisResult, error) {
 	return nil, nil
 }
 func (m *mockStorage) CreateEvaluator(_ context.Context, _ *storage.Evaluator) error { return nil }
@@ -230,7 +239,10 @@ func (m *mockStorage) GetDriftResultsByBaseline(_ context.Context, _ string, _ i
 func (m *mockStorage) GetLatestDriftResult(_ context.Context, _ string) (*storage.DriftResult, error) {
 	return nil, nil
 }
-func (m *mockStorage) ListDriftResults(_ context.Context, _ int) ([]*storage.DriftResult, error) {
+func (m *mockStorage) GetDriftResultForPair(_ context.Context, _ string, _ string) (*storage.DriftResult, error) {
+	return nil, nil
+}
+func (m *mockStorage) ListDriftResults(_ context.Context, _ int, _ int) ([]*storage.DriftResult, error) {
 	return nil, nil
 }
 func (m *mockStorage) HasDriftResultForBaseline(_ context.Context, _ string, _ string) (bool, error) {
@@ -286,7 +298,7 @@ func TestEngine_Run_HappyPath(t *testing.T) {
 	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{
 		Model:    "gpt-4o",
 		Provider: "openai",
-	})
+	}, 0.8)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -300,6 +312,10 @@ func TestEngine_Run_HappyPath(t *testing.T) {
 	require.NotNil(t, exp)
 	assert.Equal(t, storage.StatusCompleted, exp.Status)
 	assert.Equal(t, 1.0, exp.Progress)
+	require.NotNil(t, exp.Config.Threshold)
+	assert.Equal(t, "gpt-4o", exp.Config.Model)
+	assert.Equal(t, "openai", exp.Config.Provider)
+	assert.Equal(t, 0.8, *exp.Config.Threshold)
 
 	// Verify variant run completed with trace ID
 	variantRun := store.experimentRuns[result.VariantRunID]
@@ -382,7 +398,7 @@ func TestEngine_Run_ForwardsToolAwareRequestFields(t *testing.T) {
 		RequestHeaders: map[string]string{
 			"X-Freeze-Trace-ID": "baseline-trace-123",
 		},
-	})
+	}, 0.8)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -423,7 +439,7 @@ func TestEngine_Run_StepFailure(t *testing.T) {
 	}
 
 	engine := NewEngine(store, completer)
-	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"})
+	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"}, 0.8)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "replay step 1")
@@ -441,10 +457,10 @@ func TestEngine_Run_EmptyBaseline(t *testing.T) {
 	// No traces for this ID
 
 	engine := NewEngine(store, &mockCompleter{})
-	_, err := engine.Run(context.Background(), "nonexistent-trace", VariantConfig{Model: "gpt-4o"})
+	_, err := engine.Run(context.Background(), "nonexistent-trace", VariantConfig{Model: "gpt-4o"}, 0.8)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no replay traces found")
+	assert.True(t, errors.Is(err, storage.ErrTraceNotFound))
 }
 
 func TestEngine_Run_ContextCancellation(t *testing.T) {
@@ -458,7 +474,7 @@ func TestEngine_Run_ContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately
 
 	engine := NewEngine(store, &mockCompleter{})
-	_, err := engine.Run(ctx, "baseline-trace-123", VariantConfig{Model: "gpt-4o"})
+	_, err := engine.Run(ctx, "baseline-trace-123", VariantConfig{Model: "gpt-4o"}, 0.8)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
@@ -478,7 +494,7 @@ func TestEngine_Run_StepFailure_CleanupStillMarksExperimentFailedWhenRunUpdateFa
 	}
 
 	engine := NewEngine(store, completer)
-	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"})
+	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"}, 0.8)
 
 	require.Error(t, err)
 	require.NotNil(t, result)
@@ -516,7 +532,7 @@ func TestEngine_Run_FinalizeRunUpdateFailureTriggersCleanup(t *testing.T) {
 	}
 
 	engine := NewEngine(store, completer)
-	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"})
+	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"}, 0.8)
 
 	require.Error(t, err)
 	require.NotNil(t, result)
@@ -558,7 +574,7 @@ func TestEngine_Run_FinalizeExperimentUpdateFailureTriggersCleanup(t *testing.T)
 	}
 
 	engine := NewEngine(store, completer)
-	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"})
+	result, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"}, 0.8)
 
 	require.Error(t, err)
 	require.NotNil(t, result)
@@ -588,7 +604,7 @@ func TestEngine_Run_VariantRunCreationFailureMarksExperimentFailed(t *testing.T)
 	}
 
 	engine := NewEngine(store, &mockCompleter{})
-	_, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"})
+	_, err := engine.Run(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"}, 0.8)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "create variant run")

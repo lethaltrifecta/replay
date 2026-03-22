@@ -32,7 +32,7 @@ func RunGatePipeline(ctx context.Context, store storage.Storage, engine *replay.
 			"experiment_id", prepared.ExperimentID,
 			"error", err,
 		)
-		markExperimentFailed(ctx, store, prepared, fmt.Errorf("reload baseline: %w", err), log)
+		markPipelineFailed(engine, prepared, fmt.Errorf("reload baseline: %w", err), log)
 		return
 	}
 
@@ -42,7 +42,7 @@ func RunGatePipeline(ctx context.Context, store storage.Storage, engine *replay.
 			"experiment_id", prepared.ExperimentID,
 			"error", err,
 		)
-		markExperimentFailed(ctx, store, prepared, fmt.Errorf("reload variant: %w", err), log)
+		markPipelineFailed(engine, prepared, fmt.Errorf("reload variant: %w", err), log)
 		return
 	}
 
@@ -76,6 +76,8 @@ func RunGatePipeline(ctx context.Context, store storage.Storage, engine *replay.
 			"experiment_id", prepared.ExperimentID,
 			"error", err,
 		)
+		markPipelineFailed(engine, prepared, fmt.Errorf("persist analysis: %w", err), log)
+		return
 	}
 
 	log.Infow("gate pipeline completed",
@@ -85,12 +87,10 @@ func RunGatePipeline(ctx context.Context, store storage.Storage, engine *replay.
 	)
 }
 
-// markExperimentFailed marks the experiment as failed when post-replay steps fail.
-func markExperimentFailed(ctx context.Context, store storage.Storage, prepared *replay.PreparedRun, pipelineErr error, log *logger.Logger) {
-	exp := prepared.Experiment
-	exp.Status = storage.StatusFailed
-	if err := store.UpdateExperiment(ctx, exp); err != nil {
-		log.Errorw("failed to mark experiment as failed",
+// markPipelineFailed marks both the experiment and variant run as failed after Execute has returned.
+func markPipelineFailed(engine *replay.Engine, prepared *replay.PreparedRun, pipelineErr error, log *logger.Logger) {
+	if err := engine.FailPreparedRun(prepared, pipelineErr); err != nil {
+		log.Errorw("failed to mark pipeline run as failed",
 			"experiment_id", prepared.ExperimentID,
 			"pipeline_error", pipelineErr,
 			"update_error", err,

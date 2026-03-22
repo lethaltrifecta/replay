@@ -23,7 +23,7 @@ agentgateway (or any OTLP emitter)
 | CMDR service (`cmdr serve`)   |
 | - OTLP receiver               |
 | - parser (`gen_ai.*`)         |
-| - drift baseline/check logic  |
+| - pair-based drift + gate logic |
 +-------------------------------+
         |
         v
@@ -66,40 +66,32 @@ More detailed setup and validation: [docs/QUICKSTART.md](docs/QUICKSTART.md)
 
 ## Drift Workflow
 
-Mark an existing trace as baseline:
+Compare a candidate trace against a specific baseline:
 
 ```bash
-cmdr drift baseline set <trace-id> --name "prod-baseline"
+cmdr drift check <baseline-trace-id> <candidate-trace-id>
 ```
 
-List baselines:
+List stored drift results:
 
 ```bash
-cmdr drift baseline list
+cmdr drift list --limit 20
 ```
 
-Compare a candidate trace against the most recent baseline:
+Filter drift results for a specific baseline:
 
 ```bash
-cmdr drift check <candidate-trace-id>
-```
-
-Compare against a specific baseline:
-
-```bash
-cmdr drift check <candidate-trace-id> --baseline <baseline-trace-id>
-```
-
-Remove baseline:
-
-```bash
-cmdr drift baseline remove <trace-id>
+cmdr drift list --baseline <baseline-trace-id> --limit 20
 ```
 
 Each drift check stores a row in `drift_results` with:
 - composite drift score (`0.0` to `1.0`)
 - verdict (`pass` / `warn` / `fail`)
 - detailed per-dimension breakdown
+
+Note:
+- Drift is explicitly pair-based on this branch. A drift result is always `candidate` compared against `baseline`.
+- Baselines are currently created through the HTTP API or the seeded demo path, not a dedicated CLI subcommand.
 
 ## Gate Workflow
 
@@ -138,7 +130,7 @@ Manual demo commands:
 
 ```bash
 cmdr demo seed
-cmdr drift check demo-drifted-002 --baseline demo-baseline-001
+cmdr drift check demo-baseline-001 demo-drifted-002
 cmdr demo gate --baseline demo-baseline-001 --model gpt-4o-danger   # exits 1
 cmdr demo gate --baseline demo-baseline-001 --model claude-3-5-sonnet  # exits 0
 ```
@@ -164,9 +156,8 @@ cmdr demo migration latest
 | Command | Description |
 |---------|-------------|
 | `cmdr serve` | Start OTLP receiver + HTTP API server |
-| `cmdr drift baseline {set,list,remove}` | Manage known-good baselines |
-| `cmdr drift check` | Compare a trace against its baseline |
-| `cmdr drift status` | Show drift scores for recent traces |
+| `cmdr drift check <baseline> <candidate>` | Compare a candidate trace against an explicit baseline |
+| `cmdr drift list` | Show stored drift results |
 | `cmdr drift watch` | Continuous drift monitoring (poll mode) |
 | `cmdr gate check` | Replay baseline with variant model, produce pass/fail verdict |
 | `cmdr gate report` | Show saved experiment results |

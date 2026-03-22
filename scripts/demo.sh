@@ -32,7 +32,7 @@ echo "--- Scene 2: Drift Detection ---"
 echo "A new agent run comes in. Same task, but the agent goes rogue..."
 echo "It calls delete_database instead of run_tests at step 3."
 echo ""
-$CMDR drift check demo-drifted-002 --baseline demo-baseline-001
+$CMDR drift check demo-baseline-001 demo-drifted-002
 echo ""
 sleep 3
 
@@ -63,11 +63,8 @@ sleep 2
 # Summary
 echo "--- Results ---"
 echo ""
-echo "Drift history:"
-$CMDR drift status --limit 5
-echo ""
-echo "Registered baselines:"
-$CMDR drift baseline list
+echo "Recent drift results:"
+$CMDR drift list --limit 5
 echo ""
 echo "========================================="
 echo "  CMDR: Govern agents before they govern you."

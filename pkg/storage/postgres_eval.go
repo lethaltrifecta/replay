@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -37,7 +36,7 @@ func (s *PostgresStorage) GetEvaluationRun(ctx context.Context, id uuid.UUID) (*
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("evaluation run not found: %s", id)
+		return nil, ErrEvaluationRunNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -141,7 +140,7 @@ func (s *PostgresStorage) GetHumanEvaluation(ctx context.Context, id uuid.UUID) 
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("human evaluation not found: %s", id)
+		return nil, ErrHumanEvaluationNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -233,7 +232,7 @@ func (s *PostgresStorage) GetGroundTruth(ctx context.Context, taskID string) (*G
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("ground truth not found: %s", taskID)
+		return nil, ErrGroundTruthNotFound
 	}
 	if err != nil {
 		return nil, err

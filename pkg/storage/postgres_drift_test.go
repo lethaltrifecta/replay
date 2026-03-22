@@ -1,3 +1,5 @@
+//go:build integration
+
 package storage
 
 import (
@@ -8,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func intPtr(i int) *int { return &i }
 
 // helper to insert a replay trace for baseline tests
 func insertTestTrace(t *testing.T, s *PostgresStorage, traceID string) {
@@ -68,6 +72,37 @@ func TestMarkTraceAsBaseline(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v2 baseline", *got2.Name)
 	assert.Equal(t, "updated description", *got2.Description)
+}
+
+func TestMarkTraceAsBaseline_PreservesOmittedFieldsOnRemark(t *testing.T) {
+	store := setupTestDB(t)
+	defer teardownTestDB(t, store)
+
+	ctx := context.Background()
+	insertTestTrace(t, store, "baseline-trace-preserve")
+
+	name := "original name"
+	description := "original description"
+	err := store.MarkTraceAsBaseline(ctx, &Baseline{
+		TraceID:     "baseline-trace-preserve",
+		Name:        &name,
+		Description: &description,
+	})
+	require.NoError(t, err)
+
+	updatedName := "updated name"
+	err = store.MarkTraceAsBaseline(ctx, &Baseline{
+		TraceID: "baseline-trace-preserve",
+		Name:    &updatedName,
+	})
+	require.NoError(t, err)
+
+	got, err := store.GetBaseline(ctx, "baseline-trace-preserve")
+	require.NoError(t, err)
+	require.NotNil(t, got.Name)
+	require.NotNil(t, got.Description)
+	assert.Equal(t, "updated name", *got.Name)
+	assert.Equal(t, "original description", *got.Description)
 }
 
 func TestMarkTraceAsBaseline_TraceNotFound(t *testing.T) {
@@ -170,7 +205,11 @@ func TestCreateDriftResult(t *testing.T) {
 		BaselineTraceID: "baseline-1",
 		DriftScore:      0.15,
 		Verdict:         DriftVerdictPass,
-		Details:         JSONB{"tool_pattern_diff": 0.1, "risk_shift": 0.05},
+		Details: DriftDetails{
+			Reason:         "tool pattern changed",
+			DivergenceStep: intPtr(1),
+			RiskEscalation: false,
+		},
 	}
 
 	err := store.CreateDriftResult(ctx, result)
@@ -270,7 +309,7 @@ func TestGetLatestDriftResult(t *testing.T) {
 	// Not found
 	_, err := store.GetLatestDriftResult(ctx, "nonexistent")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no drift results found")
+	assert.ErrorIs(t, err, ErrNotFound)
 
 	// Insert multiple, should get the latest
 	r1 := &DriftResult{
@@ -304,7 +343,7 @@ func TestListDriftResults(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty
-	results, err := store.ListDriftResults(ctx, 10)
+	results, err := store.ListDriftResults(ctx, 10, 0)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 
@@ -321,16 +360,57 @@ func TestListDriftResults(t *testing.T) {
 	}
 
 	// Limit 2 — should get the 2 newest
-	results, err = store.ListDriftResults(ctx, 2)
+	results, err = store.ListDriftResults(ctx, 2, 0)
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Equal(t, "trace-c", results[0].TraceID)
 	assert.Equal(t, "trace-b", results[1].TraceID)
 
+	// Offset 1 — skip newest, get next two (only b, a available)
+	results, err = store.ListDriftResults(ctx, 10, 1)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "trace-b", results[0].TraceID)
+	assert.Equal(t, "trace-a", results[1].TraceID)
+
 	// Limit larger than count — returns all
-	results, err = store.ListDriftResults(ctx, 100)
+	results, err = store.ListDriftResults(ctx, 100, 0)
 	require.NoError(t, err)
 	assert.Len(t, results, 3)
+}
+
+func TestGetDriftResultForPair(t *testing.T) {
+	store := setupTestDB(t)
+	defer teardownTestDB(t, store)
+
+	ctx := context.Background()
+
+	// Insert results for multiple pairs
+	pairs := [][]string{
+		{"trace-1", "base-a"},
+		{"trace-1", "base-b"},
+		{"trace-2", "base-a"},
+	}
+	for _, p := range pairs {
+		err := store.CreateDriftResult(ctx, &DriftResult{
+			TraceID:         p[0],
+			BaselineTraceID: p[1],
+			DriftScore:      0.5,
+			Verdict:         DriftVerdictPass,
+		})
+		require.NoError(t, err)
+	}
+
+	// Fetch specific pair
+	res, err := store.GetDriftResultForPair(ctx, "trace-1", "base-b")
+	require.NoError(t, err)
+	assert.Equal(t, "trace-1", res.TraceID)
+	assert.Equal(t, "base-b", res.BaselineTraceID)
+
+	// Fetch non-existent pair
+	_, err = store.GetDriftResultForPair(ctx, "trace-1", "base-c")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }
 
 func TestHasDriftResultForBaseline(t *testing.T) {
@@ -381,7 +461,11 @@ func TestCreateDriftResult_DuplicateIsIdempotent(t *testing.T) {
 		BaselineTraceID: "dup-baseline",
 		DriftScore:      0.25,
 		Verdict:         DriftVerdictPass,
-		Details:         JSONB{"info": "first"},
+		Details: DriftDetails{
+			Reason:         "first",
+			DivergenceStep: intPtr(1),
+			RiskEscalation: false,
+		},
 	}
 	err := store.CreateDriftResult(ctx, r1)
 	require.NoError(t, err)
@@ -393,7 +477,11 @@ func TestCreateDriftResult_DuplicateIsIdempotent(t *testing.T) {
 		BaselineTraceID: "dup-baseline",
 		DriftScore:      0.9,
 		Verdict:         DriftVerdictFail,
-		Details:         JSONB{"info": "second"},
+		Details: DriftDetails{
+			Reason:         "second",
+			DivergenceStep: intPtr(2),
+			RiskEscalation: true,
+		},
 	}
 	err = store.CreateDriftResult(ctx, r2)
 	require.NoError(t, err, "duplicate insert should be idempotent")
@@ -402,5 +490,6 @@ func TestCreateDriftResult_DuplicateIsIdempotent(t *testing.T) {
 	results, err := store.GetDriftResults(ctx, "dup-trace")
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
-	assert.Equal(t, 0.25, results[0].DriftScore, "original row should be preserved")
+	assert.Equal(t, 0.9, results[0].DriftScore, "upsert should replace the existing row")
+	assert.Equal(t, "second", results[0].Details.Reason)
 }

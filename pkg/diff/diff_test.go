@@ -220,7 +220,7 @@ func TestToAnalysisResult(t *testing.T) {
 	assert.Equal(t, 340, result.LatencyDelta)
 	assert.Equal(t, float64(0), result.CostDelta)
 	assert.NotNil(t, result.BehaviorDiff)
-	assert.Equal(t, "pass", result.BehaviorDiff["verdict"])
+	assert.Equal(t, "pass", result.BehaviorDiff.Verdict)
 }
 
 func TestDefaultConfig(t *testing.T) {
@@ -379,12 +379,51 @@ func TestToAnalysisResult_WithSemanticData(t *testing.T) {
 
 	// SafetyDiff should be populated
 	assert.NotEmpty(t, result.SafetyDiff)
-	assert.Equal(t, true, result.SafetyDiff["escalation"])
+	assert.Equal(t, true, result.SafetyDiff.RiskEscalation)
+	assert.Equal(t, storage.RiskClassRead, result.SafetyDiff.BaselineRisk)
+	assert.Equal(t, storage.RiskClassWrite, result.SafetyDiff.VariantRisk)
 
 	// QualityMetrics should be populated
 	assert.NotEmpty(t, result.QualityMetrics)
 	assert.InDelta(t, 0.75, result.QualityMetrics["content_overlap"], 0.01)
 	assert.InDelta(t, 0.925, result.QualityMetrics["tool_call_score"], 0.01)
+}
+
+func TestToAnalysisResult_PreservesStructuredFirstDivergence(t *testing.T) {
+	report := &Report{
+		SimilarityScore: 0.41,
+		Verdict:         "fail",
+		FirstDivergence: storage.JSONB{
+			"type":             "response_content",
+			"step_index":       0,
+			"baseline_excerpt": "Investigate pod state first",
+			"variant_excerpt":  "Delete the pod immediately",
+		},
+	}
+
+	result := ToAnalysisResult(report, uuid.New(), uuid.New(), uuid.New())
+
+	require.NotNil(t, result.FirstDivergence.StepIndex)
+	assert.Equal(t, 0, *result.FirstDivergence.StepIndex)
+	assert.Equal(t, "response_content", result.FirstDivergence.Type)
+	assert.Equal(t, "Investigate pod state first", result.FirstDivergence.BaselineExcerpt)
+	assert.Equal(t, "Delete the pod immediately", result.FirstDivergence.VariantExcerpt)
+}
+
+func TestStructuredFirstDivergence_PreservesNumericCountFields(t *testing.T) {
+	got := StructuredFirstDivergence(storage.JSONB{
+		"type":           "tool_count",
+		"tool_index":     0,
+		"baseline_count": 1,
+		"variant_count":  3,
+	})
+
+	require.NotNil(t, got.ToolIndex)
+	require.NotNil(t, got.BaselineCount)
+	require.NotNil(t, got.VariantCount)
+	assert.Equal(t, 0, *got.ToolIndex)
+	assert.Equal(t, 1, *got.BaselineCount)
+	assert.Equal(t, 3, *got.VariantCount)
 }
 
 func TestFindFirstDivergence_ResponseContentIncludesExcerpts(t *testing.T) {

@@ -215,7 +215,7 @@ func printMigrationVerdict(cmd *cobra.Command, baselineTraceID, candidateTraceID
 		cmd.Printf("  response      %.2f  (jaccard=%.2f, length=%.2f)\n",
 			report.ResponseScore.Score, report.ResponseScore.ContentOverlap, report.ResponseScore.LengthSimilarity)
 	}
-	if summary := formatFirstDivergence(report.FirstDivergence); summary != "" {
+	if summary := formatFirstDivergence(toStructuredDivergence(report.FirstDivergence)); summary != "" {
 		cmd.Printf("\nFirst Divergence:\n")
 		cmd.Printf("  %s\n", summary)
 	}
