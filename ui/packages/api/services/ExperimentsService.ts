@@ -98,7 +98,7 @@ export class ExperimentsService {
                 400: `Generic error response`,
                 404: `Generic error response`,
                 500: `Generic error response`,
-                503: `Service unavailable (at capacity)`,
+                503: `Generic error response`,
             },
         });
     }

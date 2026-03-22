@@ -1,9 +1,14 @@
 package commands
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -297,6 +302,116 @@ func TestBuildReplayHeaders_CaseDuplicateRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, headers)
 	assert.Contains(t, err.Error(), "case-insensitive collision")
+}
+
+func TestRunGateCheckRemote_UsesGeneratedClient(t *testing.T) {
+	previousInterval := remoteStatusPollInterval
+	remoteStatusPollInterval = time.Millisecond
+	t.Cleanup(func() {
+		remoteStatusPollInterval = previousInterval
+	})
+
+	experimentID := uuid.New()
+	var submittedBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/gate/check":
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&submittedBody))
+			w.WriteHeader(http.StatusAccepted)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"experimentId": experimentID.String(),
+				"status":       storage.StatusRunning,
+			}))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/gate/status/"+experimentID.String():
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"experimentId": experimentID.String(),
+				"status":       storage.StatusCompleted,
+				"progress":     1.0,
+			}))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/gate/report/"+experimentID.String():
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"experimentId":    experimentID.String(),
+				"baselineTraceId": "baseline-trace",
+				"status":          storage.StatusCompleted,
+				"verdict":         "pass",
+				"similarityScore": 0.98,
+				"tokenDelta":      4,
+				"latencyDelta":    15,
+			}))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cmd := &cobra.Command{}
+	out := &strings.Builder{}
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+
+	err := runGateCheckRemote(cmd, server.URL, "baseline-trace", "gpt-4o", "openai", map[string]string{"X-Freeze-Trace-Id": "baseline-trace"}, 0.9)
+	require.NoError(t, err)
+	require.NotNil(t, submittedBody)
+	assert.Equal(t, "baseline-trace", submittedBody["baselineTraceId"])
+	assert.Equal(t, "gpt-4o", submittedBody["model"])
+	assert.Equal(t, "openai", submittedBody["provider"])
+	assert.Contains(t, out.String(), "Experiment "+experimentID.String()+" submitted")
+	assert.Contains(t, out.String(), "Verdict:    PASS")
+}
+
+func TestRunGateCheckRemote_ServerErrorIncludesAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			"error": "agentgateway not configured",
+			"code":  "MISSING_DEPENDENCY",
+		}))
+	}))
+	defer server.Close()
+
+	cmd := &cobra.Command{}
+	err := runGateCheckRemote(cmd, server.URL, "baseline-trace", "gpt-4o", "", nil, 0.8)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "submit gate check")
+	assert.Contains(t, err.Error(), "agentgateway not configured")
+}
+
+func TestFetchAndPrintRemoteReport_DerivesVariantModel(t *testing.T) {
+	experimentID := uuid.New()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.Equal(t, "/api/v1/gate/report/"+experimentID.String(), r.URL.Path)
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			"experimentId":    experimentID.String(),
+			"baselineTraceId": "baseline-trace",
+			"status":          storage.StatusCompleted,
+			"verdict":         "pass",
+			"runs": []map[string]any{
+				{
+					"runType": "variant",
+					"variantConfig": map[string]any{
+						"model": "claude-3-5-sonnet",
+					},
+				},
+			},
+		}))
+	}))
+	defer server.Close()
+
+	client, err := newRemoteAPIClient(server.URL)
+	require.NoError(t, err)
+
+	cmd := &cobra.Command{}
+	out := &strings.Builder{}
+	cmd.SetOut(out)
+
+	err = fetchAndPrintRemoteReport(context.Background(), client, cmd, openapiClientUUID(experimentID), "")
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "Variant:    claude-3-5-sonnet")
 }
 
 func TestBuildReplayHeaders_FreezeTraceIDCollision(t *testing.T) {

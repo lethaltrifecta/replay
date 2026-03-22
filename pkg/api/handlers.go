@@ -1,10 +1,7 @@
 package api
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -17,26 +14,6 @@ import (
 // ensure Server implements ServerInterface
 var _ ServerInterface = (*Server)(nil)
 
-// --- Conversion Helpers ---
-
-// mapToStruct strictly converts a map (usually storage.JSONB) to a target struct.
-// Returns a 500-level error if conversion fails, as this indicates a contract/schema drift.
-func (s *Server) mapToStruct(w http.ResponseWriter, m any, target any, context string) bool {
-	if m == nil {
-		return true
-	}
-	b, err := json.Marshal(m)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to marshal %s: %v", context, err), "MARSHAL_ERROR")
-		return false
-	}
-	if err := json.Unmarshal(b, target); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to unmarshal %s: %v", context, err), "SCHEMA_DRIFT")
-		return false
-	}
-	return true
-}
-
 // --- Governance Handlers ---
 
 func (s *Server) ListBaselines(w http.ResponseWriter, r *http.Request) {
@@ -48,13 +25,7 @@ func (s *Server) ListBaselines(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]Baseline, 0, len(baselines))
 	for _, b := range baselines {
-		createdAt := b.CreatedAt
-		resp = append(resp, Baseline{
-			TraceId:     &b.TraceID,
-			Name:        b.Name,
-			Description: b.Description,
-			CreatedAt:   &createdAt,
-		})
+		resp = append(resp, baselineResponse(b))
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -88,14 +59,7 @@ func (s *Server) CreateBaseline(w http.ResponseWriter, r *http.Request, traceId 
 		return
 	}
 
-	resp := Baseline{
-		TraceId:     &stored.TraceID,
-		Name:        stored.Name,
-		Description: stored.Description,
-		CreatedAt:   &stored.CreatedAt,
-	}
-
-	writeJSON(w, http.StatusCreated, resp)
+	writeJSON(w, http.StatusCreated, baselineResponse(stored))
 }
 
 func (s *Server) DeleteBaseline(w http.ResponseWriter, r *http.Request, traceId string) {
@@ -183,25 +147,7 @@ func (s *Server) ListExperiments(w http.ResponseWriter, r *http.Request, params 
 
 	resp := make([]Experiment, 0, len(experiments))
 	for _, e := range experiments {
-		id := openapi_types.UUID(e.ID)
-		progress := float32(e.Progress)
-
-		exp := Experiment{
-			Id:              &id,
-			Name:            &e.Name,
-			BaselineTraceId: &e.BaselineTraceID,
-			Status:          &e.Status,
-			Progress:        &progress,
-			CreatedAt:       &e.CreatedAt,
-			CompletedAt:     e.CompletedAt,
-		}
-		if threshold := float32PtrFromFloat64(e.Config.Threshold); threshold != nil {
-			exp.Threshold = threshold
-		}
-		if variantConfig := apiVariantConfigFromExperiment(e.Config); variantConfig != nil {
-			exp.VariantConfig = variantConfig
-		}
-
+		var verdict *string
 		if e.Status == storage.StatusCompleted || e.Status == storage.StatusFailed {
 			results, err := s.store.GetAnalysisResults(r.Context(), e.ID)
 			if err != nil {
@@ -209,12 +155,11 @@ func (s *Server) ListExperiments(w http.ResponseWriter, r *http.Request, params 
 				return
 			}
 			if latest := latestAnalysisResult(results); latest != nil {
-				v := latest.BehaviorDiff.Verdict
-				exp.Verdict = &v
+				verdict = &latest.BehaviorDiff.Verdict
 			}
 		}
 
-		resp = append(resp, exp)
+		resp = append(resp, experimentResponse(e, verdict))
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -239,25 +184,7 @@ func (s *Server) GetExperiment(w http.ResponseWriter, r *http.Request, id openap
 
 	oapiRuns := buildExperimentRuns(runs)
 
-	oid := openapi_types.UUID(exp.ID)
-	progress := float32(exp.Progress)
-
-	resp := ExperimentDetail{}
-	resp.Id = &oid
-	resp.Name = &exp.Name
-	resp.BaselineTraceId = &exp.BaselineTraceID
-	resp.Status = &exp.Status
-	resp.Progress = &progress
-	resp.CreatedAt = &exp.CreatedAt
-	resp.CompletedAt = exp.CompletedAt
-	resp.Runs = &oapiRuns
-	if threshold := float32PtrFromFloat64(exp.Config.Threshold); threshold != nil {
-		resp.Threshold = threshold
-	}
-	if variantConfig := apiVariantConfigFromExperiment(exp.Config); variantConfig != nil {
-		resp.VariantConfig = variantConfig
-	}
-
+	var verdict *string
 	if exp.Status == storage.StatusCompleted || exp.Status == storage.StatusFailed {
 		results, err := s.store.GetAnalysisResults(r.Context(), exp.ID)
 		if err != nil {
@@ -265,12 +192,11 @@ func (s *Server) GetExperiment(w http.ResponseWriter, r *http.Request, id openap
 			return
 		}
 		if latest := latestAnalysisResult(results); latest != nil {
-			v := latest.BehaviorDiff.Verdict
-			resp.Verdict = &v
+			verdict = &latest.BehaviorDiff.Verdict
 		}
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, experimentDetailResponse(exp, oapiRuns, verdict))
 }
 
 func (s *Server) GetExperimentReport(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
@@ -292,14 +218,8 @@ func (s *Server) GetExperimentReport(w http.ResponseWriter, r *http.Request, id 
 
 	oapiRuns := buildExperimentRuns(runs)
 
-	oid := openapi_types.UUID(exp.ID)
-	resp := ExperimentReport{
-		ExperimentId:    &oid,
-		BaselineTraceId: &exp.BaselineTraceID,
-		Status:          &exp.Status,
-		Runs:            &oapiRuns,
-	}
-
+	var analysis *storage.AnalysisResult
+	var reportError *string
 	if exp.Status == storage.StatusCompleted || exp.Status == storage.StatusFailed {
 		results, err := s.store.GetAnalysisResults(r.Context(), exp.ID)
 		if err != nil {
@@ -307,44 +227,18 @@ func (s *Server) GetExperimentReport(w http.ResponseWriter, r *http.Request, id 
 			return
 		}
 		if ar := latestAnalysisResult(results); ar != nil {
-			score := float32(ar.SimilarityScore)
-			td := ar.TokenDelta
-			ld := ar.LatencyDelta
-
-			resp.SimilarityScore = &score
-			resp.TokenDelta = &td
-			resp.LatencyDelta = &ld
-
-			resp.Analysis = &AnalysisResult{
-				BehaviorDiff: &BehaviorDiff{
-					Verdict: &ar.BehaviorDiff.Verdict,
-					Reason:  &ar.BehaviorDiff.Reason,
-				},
-				FirstDivergence: &FirstDivergence{
-					StepIndex: &ar.FirstDivergence.StepIndex,
-					Type:      &ar.FirstDivergence.Type,
-					Baseline:  &ar.FirstDivergence.Baseline,
-					Variant:   &ar.FirstDivergence.Variant,
-				},
-				SafetyDiff: &SafetyDiff{
-					RiskEscalation: &ar.SafetyDiff.RiskEscalation,
-					BaselineRisk:   &ar.SafetyDiff.BaselineRisk,
-					VariantRisk:    &ar.SafetyDiff.VariantRisk,
-				},
-			}
-
-			resp.Verdict = &ar.BehaviorDiff.Verdict
+			analysis = ar
 		} else if exp.Status == storage.StatusFailed {
 			for _, run := range runs {
 				if run.Status == storage.StatusFailed && run.Error != nil {
-					resp.Error = run.Error
+					reportError = run.Error
 					break
 				}
 			}
 		}
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, experimentReportResponse(exp, oapiRuns, analysis, reportError))
 }
 
 // --- Gate Handlers ---
@@ -442,13 +336,7 @@ func (s *Server) GetGateStatus(w http.ResponseWriter, r *http.Request, id openap
 		return
 	}
 
-	oid := openapi_types.UUID(exp.ID)
-	progress := float32(exp.Progress)
-	writeJSON(w, http.StatusOK, GateStatusResponse{
-		ExperimentId: &oid,
-		Status:       &exp.Status,
-		Progress:     &progress,
-	})
+	writeJSON(w, http.StatusOK, gateStatusResponse(exp))
 }
 
 func (s *Server) GetGateReport(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
@@ -475,18 +363,7 @@ func (s *Server) ListTraces(w http.ResponseWriter, r *http.Request, params ListT
 
 	resp := make([]TraceSummary, 0, len(summaries))
 	for _, info := range summaries {
-		ca := info.CreatedAt
-
-		models := info.Models
-		providers := info.Providers
-
-		resp = append(resp, TraceSummary{
-			TraceId:   &info.TraceID,
-			Models:    &models,
-			Providers: &providers,
-			StepCount: &info.StepCount,
-			CreatedAt: &ca,
-		})
+		resp = append(resp, traceSummaryResponse(info))
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -512,137 +389,12 @@ func (s *Server) CompareTraces(w http.ResponseWriter, r *http.Request, baselineT
 		return
 	}
 
-	// 3. Get Specific Drift Result for this pair
-	var score *float32
-	var divergenceReason *string
-	var divergenceIdx *int
-
 	dr, err := s.store.GetDriftResultForPair(r.Context(), candidateTraceId, baselineTraceId)
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		writeError(w, http.StatusInternalServerError, "failed to get drift result", "DB_ERROR")
 		return
 	}
-
-	if err == nil && dr != nil {
-		sval := float32(dr.DriftScore)
-		score = &sval
-		divergenceReason = &dr.Details.Reason
-		divergenceIdx = &dr.Details.DivergenceStep
-	}
-
-	resp := TraceComparison{
-		Baseline:  baseline,
-		Candidate: candidate,
-		Diff: &struct {
-			DivergenceReason    *string  `json:"divergenceReason,omitempty"`
-			DivergenceStepIndex *int     `json:"divergenceStepIndex,omitempty"`
-			SimilarityScore     *float32 `json:"similarityScore,omitempty"`
-		}{
-			DivergenceReason:    divergenceReason,
-			DivergenceStepIndex: divergenceIdx,
-			SimilarityScore:     score,
-		},
-	}
-
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func buildExperimentRuns(runs []*storage.ExperimentRun) []ExperimentRun {
-	oapiRuns := make([]ExperimentRun, 0, len(runs))
-	for _, run := range runs {
-		rid := openapi_types.UUID(run.ID)
-		rt := ExperimentRunRunType(run.RunType)
-
-		oapiRun := ExperimentRun{
-			Id:        &rid,
-			RunType:   &rt,
-			TraceId:   run.TraceID,
-			Status:    &run.Status,
-			Error:     run.Error,
-			CreatedAt: &run.CreatedAt,
-		}
-		if variantConfig := apiVariantConfigFromStorage(run.VariantConfig); variantConfig != nil {
-			oapiRun.VariantConfig = variantConfig
-		}
-		oapiRuns = append(oapiRuns, oapiRun)
-	}
-	return oapiRuns
-}
-
-func buildToolCaptures(captures []*storage.ToolCapture) []ToolCapture {
-	oapiCaptures := make([]ToolCapture, 0, len(captures))
-	for _, c := range captures {
-		lms := c.LatencyMS
-		rc := ToolCaptureRiskClass(c.RiskClass)
-
-		argsMap := make(map[string]any, len(c.Args))
-		for k, v := range c.Args {
-			argsMap[k] = v
-		}
-		resultMap := make(map[string]any, len(c.Result))
-		for k, v := range c.Result {
-			resultMap[k] = v
-		}
-
-		oapiCaptures = append(oapiCaptures, ToolCapture{
-			ToolName:  &c.ToolName,
-			Args:      &argsMap,
-			Result:    &resultMap,
-			RiskClass: &rc,
-			LatencyMs: &lms,
-		})
-	}
-	return oapiCaptures
-}
-
-func (s *Server) buildTraceDetail(w http.ResponseWriter, ctx context.Context, traceID string, spanErrorMessage string, notFoundMessage string, notFoundCode string, promptContext string, toolCaptureError string) (*TraceDetail, bool) {
-	spans, err := s.store.GetReplayTraceSpans(ctx, traceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, spanErrorMessage, "DB_ERROR")
-		return nil, false
-	}
-	if len(spans) == 0 {
-		writeError(w, http.StatusNotFound, notFoundMessage, notFoundCode)
-		return nil, false
-	}
-
-	oapiSteps := make([]TraceStep, 0, len(spans))
-	for _, span := range spans {
-		idx := span.StepIndex
-		pt := span.PromptTokens
-		ct := span.CompletionTokens
-		lms := span.LatencyMS
-
-		var prompt PromptContent
-		if !s.mapToStruct(w, span.Prompt, &prompt, promptContext) {
-			return nil, false
-		}
-
-		oapiSteps = append(oapiSteps, TraceStep{
-			SpanId:           &span.SpanID,
-			StepIndex:        &idx,
-			Provider:         &span.Provider,
-			Model:            &span.Model,
-			Prompt:           &prompt,
-			Completion:       &span.Completion,
-			PromptTokens:     &pt,
-			CompletionTokens: &ct,
-			LatencyMs:        &lms,
-		})
-	}
-
-	captures, err := s.store.GetToolCapturesByTrace(ctx, traceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, toolCaptureError, "DB_ERROR")
-		return nil, false
-	}
-
-	oapiCaptures := buildToolCaptures(captures)
-	return &TraceDetail{
-		Steps:        &oapiSteps,
-		ToolCaptures: &oapiCaptures,
-		TraceId:      &traceID,
-	}, true
+	writeJSON(w, http.StatusOK, traceComparisonResponse(baseline, candidate, dr))
 }
 
 // --- Health ---

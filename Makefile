@@ -9,7 +9,6 @@ BUILD_DIR=bin
 OAPI_CODEGEN_VERSION=v2.6.0
 OAPI_CODEGEN=go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
 OPENAPI_TS_CODEGEN_VERSION=0.29.0
-OPENAPI_TS_CODEGEN=npx -y openapi-typescript-codegen@$(OPENAPI_TS_CODEGEN_VERSION)
 
 # Go parameters
 GOCMD=go
@@ -65,10 +64,13 @@ dev-reset: ## Reset development database
 generate: ## Generate code from OpenAPI spec
 	@echo "Generating OpenAPI code..."
 	@mkdir -p pkg/api
+	@mkdir -p pkg/apiclient
 	@mkdir -p ui/packages/api
-	$(OAPI_CODEGEN) -package api -generate types,std-http api/openapi.yaml > pkg/api/openapi_generated.gen.go
-	$(OPENAPI_TS_CODEGEN) --input api/openapi.yaml --output ui/packages/api --client fetch
+	$(OAPI_CODEGEN) -config api/oapi-server.cfg.yaml api/openapi.yaml
+	$(OAPI_CODEGEN) -config api/oapi-client.cfg.yaml api/openapi.yaml
+	bash scripts/generate-openapi-ts.sh "$(OPENAPI_TS_CODEGEN_VERSION)" api/openapi.yaml ui/packages/api
 	@echo "✅ Generated pkg/api/openapi_generated.gen.go"
+	@echo "✅ Generated pkg/apiclient/client.gen.go"
 	@echo "✅ Generated ui/packages/api"
 
 # ============================================================================
