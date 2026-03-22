@@ -3,7 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export type FirstDivergence = {
-    step_index?: number;
+    stepIndex?: number;
     type?: string;
     baseline?: string;
     variant?: string;

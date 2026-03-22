@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,7 @@ var _ ServerInterface = (*Server)(nil)
 
 // mapToStruct strictly converts a map (usually storage.JSONB) to a target struct.
 // Returns a 500-level error if conversion fails, as this indicates a contract/schema drift.
-func (s *Server) mapToStruct(w http.ResponseWriter, m interface{}, target interface{}, context string) bool {
+func (s *Server) mapToStruct(w http.ResponseWriter, m any, target any, context string) bool {
 	if m == nil {
 		return true
 	}
@@ -110,14 +111,8 @@ func (s *Server) DeleteBaseline(w http.ResponseWriter, r *http.Request, traceId 
 }
 
 func (s *Server) ListDriftResults(w http.ResponseWriter, r *http.Request, params ListDriftResultsParams) {
-	limit := 20
-	if params.Limit != nil {
-		limit = *params.Limit
-	}
-	offset := 0
-	if params.Offset != nil {
-		offset = *params.Offset
-	}
+	limit := clampLimit(params.Limit, defaultListLimit, maxListLimit)
+	offset := clampOffset(params.Offset)
 
 	results, err := s.store.ListDriftResults(r.Context(), limit, offset)
 	if err != nil {
@@ -170,15 +165,11 @@ func (s *Server) GetDriftResult(w http.ResponseWriter, r *http.Request, traceId 
 
 func (s *Server) ListExperiments(w http.ResponseWriter, r *http.Request, params ListExperimentsParams) {
 	filters := storage.ExperimentFilters{
-		Limit:  20,
+		Limit:  defaultListLimit,
 		Offset: 0,
 	}
-	if params.Limit != nil {
-		filters.Limit = *params.Limit
-	}
-	if params.Offset != nil {
-		filters.Offset = *params.Offset
-	}
+	filters.Limit = clampLimit(params.Limit, defaultListLimit, maxListLimit)
+	filters.Offset = clampOffset(params.Offset)
 	if params.Status != nil {
 		st := string(*params.Status)
 		filters.Status = &st
@@ -246,24 +237,7 @@ func (s *Server) GetExperiment(w http.ResponseWriter, r *http.Request, id openap
 		return
 	}
 
-	oapiRuns := make([]ExperimentRun, 0, len(runs))
-	for _, run := range runs {
-		rid := openapi_types.UUID(run.ID)
-		rt := ExperimentRunRunType(run.RunType)
-
-		oapiRun := ExperimentRun{
-			Id:        &rid,
-			RunType:   &rt,
-			TraceId:   run.TraceID,
-			Status:    &run.Status,
-			Error:     run.Error,
-			CreatedAt: &run.CreatedAt,
-		}
-		if variantConfig := apiVariantConfigFromStorage(run.VariantConfig); variantConfig != nil {
-			oapiRun.VariantConfig = variantConfig
-		}
-		oapiRuns = append(oapiRuns, oapiRun)
-	}
+	oapiRuns := buildExperimentRuns(runs)
 
 	oid := openapi_types.UUID(exp.ID)
 	progress := float32(exp.Progress)
@@ -316,24 +290,7 @@ func (s *Server) GetExperimentReport(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
-	oapiRuns := make([]ExperimentRun, 0, len(runs))
-	for _, run := range runs {
-		rid := openapi_types.UUID(run.ID)
-		rt := ExperimentRunRunType(run.RunType)
-
-		oapiRun := ExperimentRun{
-			Id:        &rid,
-			RunType:   &rt,
-			TraceId:   run.TraceID,
-			Status:    &run.Status,
-			Error:     run.Error,
-			CreatedAt: &run.CreatedAt,
-		}
-		if variantConfig := apiVariantConfigFromStorage(run.VariantConfig); variantConfig != nil {
-			oapiRun.VariantConfig = variantConfig
-		}
-		oapiRuns = append(oapiRuns, oapiRun)
-	}
+	oapiRuns := buildExperimentRuns(runs)
 
 	oid := openapi_types.UUID(exp.ID)
 	resp := ExperimentReport{
@@ -502,15 +459,11 @@ func (s *Server) GetGateReport(w http.ResponseWriter, r *http.Request, id openap
 
 func (s *Server) ListTraces(w http.ResponseWriter, r *http.Request, params ListTracesParams) {
 	filters := storage.TraceFilters{
-		Limit:  20,
+		Limit:  defaultListLimit,
 		Offset: 0,
 	}
-	if params.Limit != nil {
-		filters.Limit = *params.Limit
-	}
-	if params.Offset != nil {
-		filters.Offset = *params.Offset
-	}
+	filters.Limit = clampLimit(params.Limit, defaultListLimit, maxListLimit)
+	filters.Offset = clampOffset(params.Offset)
 	filters.Model = params.Model
 	filters.Provider = params.Provider
 
@@ -540,193 +493,23 @@ func (s *Server) ListTraces(w http.ResponseWriter, r *http.Request, params ListT
 }
 
 func (s *Server) GetTrace(w http.ResponseWriter, r *http.Request, traceId string) {
-	spans, err := s.store.GetReplayTraceSpans(r.Context(), traceId)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get trace spans", "DB_ERROR")
+	resp, ok := s.buildTraceDetail(w, r.Context(), traceId, "failed to get trace spans", "trace not found", "NOT_FOUND", "trace prompt content", "failed to get tool captures")
+	if !ok {
 		return
-	}
-	if len(spans) == 0 {
-		writeError(w, http.StatusNotFound, "trace not found", "NOT_FOUND")
-		return
-	}
-
-	oapiSteps := make([]TraceStep, 0, len(spans))
-	for _, span := range spans {
-		idx := span.StepIndex
-		pt := span.PromptTokens
-		ct := span.CompletionTokens
-		lms := span.LatencyMS
-
-		var prompt PromptContent
-		if !s.mapToStruct(w, span.Prompt, &prompt, "trace prompt content") {
-			return
-		}
-
-		oapiSteps = append(oapiSteps, TraceStep{
-			SpanId:           &span.SpanID,
-			StepIndex:        &idx,
-			Provider:         &span.Provider,
-			Model:            &span.Model,
-			Prompt:           &prompt,
-			Completion:       &span.Completion,
-			PromptTokens:     &pt,
-			CompletionTokens: &ct,
-			LatencyMs:        &lms,
-		})
-	}
-
-	captures, err := s.store.GetToolCapturesByTrace(r.Context(), traceId)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get tool captures", "DB_ERROR")
-		return
-	}
-	oapiCaptures := make([]ToolCapture, 0, len(captures))
-	for _, c := range captures {
-		lms := c.LatencyMS
-		rc := ToolCaptureRiskClass(c.RiskClass)
-
-		argsMap := make(map[string]interface{})
-		for k, v := range c.Args {
-			argsMap[k] = v
-		}
-		resultMap := make(map[string]interface{})
-		for k, v := range c.Result {
-			resultMap[k] = v
-		}
-
-		oapiCaptures = append(oapiCaptures, ToolCapture{
-			ToolName:  &c.ToolName,
-			Args:      &argsMap,
-			Result:    &resultMap,
-			RiskClass: &rc,
-			LatencyMs: &lms,
-		})
-	}
-
-	resp := TraceDetail{
-		Steps:        &oapiSteps,
-		ToolCaptures: &oapiCaptures,
-		TraceId:      &traceId,
 	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) CompareTraces(w http.ResponseWriter, r *http.Request, baselineTraceId string, candidateTraceId string) {
-	// 1. Get Baseline Full Details
-	bSpans, err := s.store.GetReplayTraceSpans(r.Context(), baselineTraceId)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get baseline spans", "DB_ERROR")
+	baseline, ok := s.buildTraceDetail(w, r.Context(), baselineTraceId, "failed to get baseline spans", "baseline trace not found", "BASELINE_NOT_FOUND", "baseline prompt", "failed to get baseline tool captures")
+	if !ok {
 		return
-	}
-	if len(bSpans) == 0 {
-		writeError(w, http.StatusNotFound, "baseline trace not found", "BASELINE_NOT_FOUND")
-		return
-	}
-	bSteps := make([]TraceStep, 0, len(bSpans))
-	for _, sval := range bSpans {
-		idx := sval.StepIndex
-		pt := sval.PromptTokens
-		ct := sval.CompletionTokens
-		lms := sval.LatencyMS
-		var prompt PromptContent
-		if !s.mapToStruct(w, sval.Prompt, &prompt, "baseline prompt") {
-			return
-		}
-		bSteps = append(bSteps, TraceStep{
-			SpanId:           &sval.SpanID,
-			StepIndex:        &idx,
-			Provider:         &sval.Provider,
-			Model:            &sval.Model,
-			Prompt:           &prompt,
-			Completion:       &sval.Completion,
-			PromptTokens:     &pt,
-			CompletionTokens: &ct,
-			LatencyMs:        &lms,
-		})
-	}
-	bCaptures, err := s.store.GetToolCapturesByTrace(r.Context(), baselineTraceId)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get baseline tool captures", "DB_ERROR")
-		return
-	}
-	oapiBCaptures := make([]ToolCapture, 0, len(bCaptures))
-	for _, c := range bCaptures {
-		lms := c.LatencyMS
-		rc := ToolCaptureRiskClass(c.RiskClass)
-		argsMap := make(map[string]interface{})
-		for k, v := range c.Args {
-			argsMap[k] = v
-		}
-		resMap := make(map[string]interface{})
-		for k, v := range c.Result {
-			resMap[k] = v
-		}
-		oapiBCaptures = append(oapiBCaptures, ToolCapture{
-			ToolName:  &c.ToolName,
-			Args:      &argsMap,
-			Result:    &resMap,
-			RiskClass: &rc,
-			LatencyMs: &lms,
-		})
 	}
 
-	// 2. Get Candidate Full Details
-	cSpans, err := s.store.GetReplayTraceSpans(r.Context(), candidateTraceId)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get candidate spans", "DB_ERROR")
+	candidate, ok := s.buildTraceDetail(w, r.Context(), candidateTraceId, "failed to get candidate spans", "candidate trace not found", "CANDIDATE_NOT_FOUND", "candidate prompt", "failed to get candidate tool captures")
+	if !ok {
 		return
-	}
-	if len(cSpans) == 0 {
-		writeError(w, http.StatusNotFound, "candidate trace not found", "CANDIDATE_NOT_FOUND")
-		return
-	}
-	cSteps := make([]TraceStep, 0, len(cSpans))
-	for _, sval := range cSpans {
-		idx := sval.StepIndex
-		pt := sval.PromptTokens
-		ct := sval.CompletionTokens
-		lms := sval.LatencyMS
-		var prompt PromptContent
-		if !s.mapToStruct(w, sval.Prompt, &prompt, "candidate prompt") {
-			return
-		}
-		cSteps = append(cSteps, TraceStep{
-			SpanId:           &sval.SpanID,
-			StepIndex:        &idx,
-			Provider:         &sval.Provider,
-			Model:            &sval.Model,
-			Prompt:           &prompt,
-			Completion:       &sval.Completion,
-			PromptTokens:     &pt,
-			CompletionTokens: &ct,
-			LatencyMs:        &lms,
-		})
-	}
-	cCaptures, err := s.store.GetToolCapturesByTrace(r.Context(), candidateTraceId)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get candidate tool captures", "DB_ERROR")
-		return
-	}
-	oapiCCaptures := make([]ToolCapture, 0, len(cCaptures))
-	for _, c := range cCaptures {
-		lms := c.LatencyMS
-		rc := ToolCaptureRiskClass(c.RiskClass)
-		argsMap := make(map[string]interface{})
-		for k, v := range c.Args {
-			argsMap[k] = v
-		}
-		resMap := make(map[string]interface{})
-		for k, v := range c.Result {
-			resMap[k] = v
-		}
-		oapiCCaptures = append(oapiCCaptures, ToolCapture{
-			ToolName:  &c.ToolName,
-			Args:      &argsMap,
-			Result:    &resMap,
-			RiskClass: &rc,
-			LatencyMs: &lms,
-		})
 	}
 
 	// 3. Get Specific Drift Result for this pair
@@ -748,16 +531,8 @@ func (s *Server) CompareTraces(w http.ResponseWriter, r *http.Request, baselineT
 	}
 
 	resp := TraceComparison{
-		Baseline: &TraceDetail{
-			Steps:        &bSteps,
-			ToolCaptures: &oapiBCaptures,
-			TraceId:      &baselineTraceId,
-		},
-		Candidate: &TraceDetail{
-			Steps:        &cSteps,
-			ToolCaptures: &oapiCCaptures,
-			TraceId:      &candidateTraceId,
-		},
+		Baseline:  baseline,
+		Candidate: candidate,
 		Diff: &struct {
 			DivergenceReason    *string  `json:"divergenceReason,omitempty"`
 			DivergenceStepIndex *int     `json:"divergenceStepIndex,omitempty"`
@@ -770,6 +545,104 @@ func (s *Server) CompareTraces(w http.ResponseWriter, r *http.Request, baselineT
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func buildExperimentRuns(runs []*storage.ExperimentRun) []ExperimentRun {
+	oapiRuns := make([]ExperimentRun, 0, len(runs))
+	for _, run := range runs {
+		rid := openapi_types.UUID(run.ID)
+		rt := ExperimentRunRunType(run.RunType)
+
+		oapiRun := ExperimentRun{
+			Id:        &rid,
+			RunType:   &rt,
+			TraceId:   run.TraceID,
+			Status:    &run.Status,
+			Error:     run.Error,
+			CreatedAt: &run.CreatedAt,
+		}
+		if variantConfig := apiVariantConfigFromStorage(run.VariantConfig); variantConfig != nil {
+			oapiRun.VariantConfig = variantConfig
+		}
+		oapiRuns = append(oapiRuns, oapiRun)
+	}
+	return oapiRuns
+}
+
+func buildToolCaptures(captures []*storage.ToolCapture) []ToolCapture {
+	oapiCaptures := make([]ToolCapture, 0, len(captures))
+	for _, c := range captures {
+		lms := c.LatencyMS
+		rc := ToolCaptureRiskClass(c.RiskClass)
+
+		argsMap := make(map[string]any, len(c.Args))
+		for k, v := range c.Args {
+			argsMap[k] = v
+		}
+		resultMap := make(map[string]any, len(c.Result))
+		for k, v := range c.Result {
+			resultMap[k] = v
+		}
+
+		oapiCaptures = append(oapiCaptures, ToolCapture{
+			ToolName:  &c.ToolName,
+			Args:      &argsMap,
+			Result:    &resultMap,
+			RiskClass: &rc,
+			LatencyMs: &lms,
+		})
+	}
+	return oapiCaptures
+}
+
+func (s *Server) buildTraceDetail(w http.ResponseWriter, ctx context.Context, traceID string, spanErrorMessage string, notFoundMessage string, notFoundCode string, promptContext string, toolCaptureError string) (*TraceDetail, bool) {
+	spans, err := s.store.GetReplayTraceSpans(ctx, traceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, spanErrorMessage, "DB_ERROR")
+		return nil, false
+	}
+	if len(spans) == 0 {
+		writeError(w, http.StatusNotFound, notFoundMessage, notFoundCode)
+		return nil, false
+	}
+
+	oapiSteps := make([]TraceStep, 0, len(spans))
+	for _, span := range spans {
+		idx := span.StepIndex
+		pt := span.PromptTokens
+		ct := span.CompletionTokens
+		lms := span.LatencyMS
+
+		var prompt PromptContent
+		if !s.mapToStruct(w, span.Prompt, &prompt, promptContext) {
+			return nil, false
+		}
+
+		oapiSteps = append(oapiSteps, TraceStep{
+			SpanId:           &span.SpanID,
+			StepIndex:        &idx,
+			Provider:         &span.Provider,
+			Model:            &span.Model,
+			Prompt:           &prompt,
+			Completion:       &span.Completion,
+			PromptTokens:     &pt,
+			CompletionTokens: &ct,
+			LatencyMs:        &lms,
+		})
+	}
+
+	captures, err := s.store.GetToolCapturesByTrace(ctx, traceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, toolCaptureError, "DB_ERROR")
+		return nil, false
+	}
+
+	oapiCaptures := buildToolCaptures(captures)
+	return &TraceDetail{
+		Steps:        &oapiSteps,
+		ToolCaptures: &oapiCaptures,
+		TraceId:      &traceID,
+	}, true
 }
 
 // --- Health ---

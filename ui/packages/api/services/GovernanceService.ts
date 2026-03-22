@@ -47,6 +47,7 @@ export class GovernanceService {
             errors: {
                 400: `Generic error response`,
                 404: `Generic error response`,
+                500: `Generic error response`,
             },
         });
     }
@@ -67,6 +68,7 @@ export class GovernanceService {
             },
             errors: {
                 404: `Generic error response`,
+                500: `Generic error response`,
             },
         });
     }
@@ -87,6 +89,9 @@ export class GovernanceService {
             query: {
                 'limit': limit,
                 'offset': offset,
+            },
+            errors: {
+                500: `Generic error response`,
             },
         });
     }
@@ -113,6 +118,7 @@ export class GovernanceService {
             errors: {
                 400: `Generic error response`,
                 404: `Generic error response`,
+                500: `Generic error response`,
             },
         });
     }

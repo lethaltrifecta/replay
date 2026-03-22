@@ -3,8 +3,8 @@
 /* tslint:disable */
 /* eslint-disable */
 export type SafetyDiff = {
-    risk_escalation?: boolean;
-    baseline_risk?: string;
-    variant_risk?: string;
+    riskEscalation?: boolean;
+    baselineRisk?: string;
+    variantRisk?: string;
 };
 

@@ -29,11 +29,25 @@ type Server struct {
 	cancel     context.CancelFunc
 }
 
+func isNilCompleter(completer replay.Completer) bool {
+	if completer == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(completer)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 // NewServer creates a new API server.
 func NewServer(cfg ServerConfig, store storage.Storage, completer replay.Completer, log *logger.Logger) *Server {
 	// Normalize typed nil to untyped nil so s.completer == nil works reliably.
 	// In Go, a nil *ConcreteType stored in an interface is non-nil.
-	if completer != nil && reflect.ValueOf(completer).IsNil() {
+	if isNilCompleter(completer) {
 		completer = nil
 	}
 

@@ -217,7 +217,17 @@ func (m *mockStorage) GetExperimentRun(_ context.Context, id uuid.UUID) (*storag
 }
 
 func (m *mockStorage) UpdateExperimentRun(_ context.Context, run *storage.ExperimentRun) error {
-	return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for experimentID, runs := range m.experimentRuns {
+		for i, existing := range runs {
+			if existing.ID == run.ID {
+				m.experimentRuns[experimentID][i] = run
+				return nil
+			}
+		}
+	}
+	return storage.ErrNotFound
 }
 
 func (m *mockStorage) ListExperimentRuns(_ context.Context, experimentID uuid.UUID) ([]*storage.ExperimentRun, error) {
@@ -708,6 +718,26 @@ func TestHandleTraces_ListFilterPreservesFullSummary(t *testing.T) {
 	assert.Equal(t, []string{"anthropic", "openai"}, *list[0].Providers)
 }
 
+func TestHandleTraces_ListNormalizesPagination(t *testing.T) {
+	store := newMockStorage()
+	for i := 0; i < 120; i++ {
+		traceID := fmt.Sprintf("trace-%03d", i)
+		seedBaseline(store, traceID, 1)
+		store.replayTraces[traceID][0].CreatedAt = time.Unix(int64(i), 0)
+	}
+	srv := newTestServer(t, store, nil, 5)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/traces?limit=1000&offset=-5", nil)
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var list []TraceSummary
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
+	assert.Len(t, list, maxListLimit)
+	assert.Equal(t, "trace-119", *list[0].TraceId)
+}
+
 func TestHandleTraces_GetPromptSchemaDrift_500(t *testing.T) {
 	store := newMockStorage()
 	seedBaseline(store, "trace-1", 1)
@@ -914,6 +944,28 @@ func TestHandleDriftResults_Pagination(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &resp2)
 	assert.Len(t, resp2, 2)
 	assert.Equal(t, "trace-2", *resp2[0].TraceId)
+}
+
+func TestHandleDriftResults_LimitIsClamped(t *testing.T) {
+	store := newMockStorage()
+	for i := 0; i < 150; i++ {
+		store.CreateDriftResult(context.Background(), &storage.DriftResult{
+			TraceID:         fmt.Sprintf("trace-%03d", i),
+			BaselineTraceID: "base",
+			DriftScore:      0.5,
+		})
+	}
+
+	srv := newTestServer(t, store, nil, 5)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/drift-results?limit=1000", nil)
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp []DriftResult
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Len(t, resp, 100)
 }
 
 func TestHandleCompareTraces_CorrectPair(t *testing.T) {
@@ -1258,4 +1310,24 @@ func TestHandleGateCheck_TypedNilCompleter_503(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	assert.Contains(t, rec.Body.String(), "agentgateway not configured")
+}
+
+type valueCompleter struct{}
+
+func (valueCompleter) Complete(_ context.Context, _ *agwclient.CompletionRequest) (*agwclient.CompletionResponse, error) {
+	return &agwclient.CompletionResponse{}, nil
+}
+
+func TestNewServer_ValueCompleter_DoesNotPanic(t *testing.T) {
+	store := newMockStorage()
+	log, err := logger.New("debug")
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		srv := NewServer(ServerConfig{
+			Port:                 0,
+			MaxConcurrentReplays: 5,
+		}, store, valueCompleter{}, log)
+		require.NotNil(t, srv.completer)
+	})
 }

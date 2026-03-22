@@ -4,7 +4,7 @@
 /* eslint-disable */
 export type DriftDetails = {
     reason?: string;
-    divergence_step?: number;
-    risk_escalation?: boolean;
+    divergenceStep?: number;
+    riskEscalation?: boolean;
 };
 

@@ -106,9 +106,9 @@ func (e ListExperimentsParamsStatus) Valid() bool {
 
 // AnalysisResult defines model for AnalysisResult.
 type AnalysisResult struct {
-	BehaviorDiff    *BehaviorDiff    `json:"behavior_diff,omitempty"`
-	FirstDivergence *FirstDivergence `json:"first_divergence,omitempty"`
-	SafetyDiff      *SafetyDiff      `json:"safety_diff,omitempty"`
+	BehaviorDiff    *BehaviorDiff    `json:"behaviorDiff,omitempty"`
+	FirstDivergence *FirstDivergence `json:"firstDivergence,omitempty"`
+	SafetyDiff      *SafetyDiff      `json:"safetyDiff,omitempty"`
 }
 
 // Baseline defines model for Baseline.
@@ -127,9 +127,9 @@ type BehaviorDiff struct {
 
 // DriftDetails defines model for DriftDetails.
 type DriftDetails struct {
-	DivergenceStep *int    `json:"divergence_step,omitempty"`
+	DivergenceStep *int    `json:"divergenceStep,omitempty"`
 	Reason         *string `json:"reason,omitempty"`
-	RiskEscalation *bool   `json:"risk_escalation,omitempty"`
+	RiskEscalation *bool   `json:"riskEscalation,omitempty"`
 }
 
 // DriftResult defines model for DriftResult.
@@ -205,7 +205,7 @@ type ExperimentRunRunType string
 // FirstDivergence defines model for FirstDivergence.
 type FirstDivergence struct {
 	Baseline  *string `json:"baseline,omitempty"`
-	StepIndex *int    `json:"step_index,omitempty"`
+	StepIndex *int    `json:"stepIndex,omitempty"`
 	Type      *string `json:"type,omitempty"`
 	Variant   *string `json:"variant,omitempty"`
 }
@@ -248,9 +248,9 @@ type PromptMessage struct {
 
 // SafetyDiff defines model for SafetyDiff.
 type SafetyDiff struct {
-	BaselineRisk   *string `json:"baseline_risk,omitempty"`
-	RiskEscalation *bool   `json:"risk_escalation,omitempty"`
-	VariantRisk    *string `json:"variant_risk,omitempty"`
+	BaselineRisk   *string `json:"baselineRisk,omitempty"`
+	RiskEscalation *bool   `json:"riskEscalation,omitempty"`
+	VariantRisk    *string `json:"variantRisk,omitempty"`
 }
 
 // ToolCapture defines model for ToolCapture.

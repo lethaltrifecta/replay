@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,11 +12,11 @@ import (
 
 // --- JSONB Support Helpers ---
 
-func jsonValue(v interface{}) (driver.Value, error) {
+func jsonValue(v any) (driver.Value, error) {
 	return json.Marshal(v)
 }
 
-func jsonScan(src interface{}, target interface{}) error {
+func jsonScan(src any, target any) error {
 	if src == nil {
 		return nil
 	}
@@ -144,18 +145,15 @@ func (c ExperimentConfig) ToVariantConfig() VariantConfig {
 		MaxTokens:   c.MaxTokens,
 	}
 	if len(c.RequestHeaders) > 0 {
-		cfg.RequestHeaders = make(map[string]string, len(c.RequestHeaders))
-		for k, v := range c.RequestHeaders {
-			cfg.RequestHeaders[k] = v
-		}
+		cfg.RequestHeaders = maps.Clone(c.RequestHeaders)
 	}
 	return cfg
 }
 
 // JSONB is a type alias for PostgreSQL JSONB columns.
-// pgx handles map[string]interface{} natively as JSONB, so no custom
+// pgx handles map[string]any natively as JSONB, so no custom
 // driver.Valuer or sql.Scanner implementations are needed.
-type JSONB map[string]interface{}
+type JSONB map[string]any
 
 // OTELTrace represents a raw OTEL trace span.
 type OTELTrace struct {

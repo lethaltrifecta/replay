@@ -33,6 +33,9 @@ export class ExperimentsService {
                 'limit': limit,
                 'offset': offset,
             },
+            errors: {
+                500: `Generic error response`,
+            },
         });
     }
     /**
@@ -52,6 +55,7 @@ export class ExperimentsService {
             },
             errors: {
                 404: `Generic error response`,
+                500: `Generic error response`,
             },
         });
     }
@@ -72,6 +76,7 @@ export class ExperimentsService {
             },
             errors: {
                 404: `Generic error response`,
+                500: `Generic error response`,
             },
         });
     }
@@ -91,6 +96,8 @@ export class ExperimentsService {
             mediaType: 'application/json',
             errors: {
                 400: `Generic error response`,
+                404: `Generic error response`,
+                500: `Generic error response`,
                 503: `Service unavailable (at capacity)`,
             },
         });
@@ -112,6 +119,7 @@ export class ExperimentsService {
             },
             errors: {
                 404: `Generic error response`,
+                500: `Generic error response`,
             },
         });
     }
@@ -132,6 +140,7 @@ export class ExperimentsService {
             },
             errors: {
                 404: `Generic error response`,
+                500: `Generic error response`,
             },
         });
     }

@@ -1,4 +1,4 @@
-.PHONY: help build test test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset generate
+.PHONY: help build build-all test test-all test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset generate
 
 # Binary name
 BINARY_NAME=cmdr
@@ -43,11 +43,12 @@ setup-dev: ## Set up local development environment
 
 dev-up: ## Start development services (PostgreSQL, Jaeger)
 	@echo "Starting development services with $(DOCKER_COMPOSE)..."
-	$(DOCKER_COMPOSE) up -d db
+	$(DOCKER_COMPOSE) up -d postgres jaeger
 	@echo "Waiting for services to be ready..."
 	@sleep 3
 	@echo "✅ Development services started"
 	@echo "   - PostgreSQL: localhost:5432"
+	@echo "   - Jaeger UI: http://localhost:16686"
 
 dev-down: ## Stop development services
 	@echo "Stopping development services..."
@@ -56,10 +57,10 @@ dev-down: ## Stop development services
 dev-reset: ## Reset development database
 	@echo "Resetting development database..."
 	$(DOCKER_COMPOSE) down -v
-	$(DOCKER_COMPOSE) up -d db
+	$(DOCKER_COMPOSE) up -d postgres jaeger
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 3
-	@echo "✅ Database reset complete"
+	@echo "✅ Development services reset complete"
 
 generate: ## Generate code from OpenAPI spec
 	@echo "Generating OpenAPI code..."
@@ -74,10 +75,12 @@ generate: ## Generate code from OpenAPI spec
 # Build
 # ============================================================================
 
-build: generate ## Build the binary
+build: ## Build the binary
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/cmdr/main.go
+	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/cmdr
+
+build-all: generate build ## Regenerate API code and build the binary
 
 run: build ## Build and run the service
 	@echo "Running $(BINARY_NAME)..."
@@ -88,9 +91,11 @@ run: build ## Build and run the service
 # Testing
 # ============================================================================
 
-test: generate ## Run unit tests
+test: ## Run unit tests
 	@echo "Running unit tests..."
 	@$(GOTEST) -v ./pkg/... ./cmd/...
+
+test-all: generate test ## Regenerate API code and run unit tests
 
 test-storage: dev-up ## Run storage tests with real PostgreSQL
 	@echo "Running storage tests..."

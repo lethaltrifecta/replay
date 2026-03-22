@@ -33,6 +33,9 @@ export class TracesService {
                 'limit': limit,
                 'offset': offset,
             },
+            errors: {
+                500: `Generic error response`,
+            },
         });
     }
     /**
@@ -52,6 +55,7 @@ export class TracesService {
             },
             errors: {
                 404: `Generic error response`,
+                500: `Generic error response`,
             },
         });
     }
@@ -75,6 +79,7 @@ export class TracesService {
             },
             errors: {
                 404: `Generic error response`,
+                500: `Generic error response`,
             },
         });
     }

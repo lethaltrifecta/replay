@@ -1,16 +1,24 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+const (
+	defaultListLimit = 20
+	maxListLimit     = 100
+)
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -19,9 +27,9 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	}
 }
 
-func readJSON(r *http.Request, v interface{}) error {
+func readJSON(r *http.Request, v any) error {
 	if r.Body == nil {
-		return fmt.Errorf("empty request body")
+		return errors.New("empty request body")
 	}
 	defer r.Body.Close()
 	dec := json.NewDecoder(r.Body)
@@ -32,7 +40,7 @@ func readJSON(r *http.Request, v interface{}) error {
 	return nil
 }
 
-func readOptionalJSON(r *http.Request, v interface{}) error {
+func readOptionalJSON(r *http.Request, v any) error {
 	if r.Body == nil {
 		return nil
 	}
@@ -55,15 +63,21 @@ func writeError(w http.ResponseWriter, status int, msg string, code string) {
 	})
 }
 
-func cloneStringMap(src map[string]string) map[string]string {
-	if len(src) == 0 {
-		return nil
+func clampLimit(value *int, defaultLimit int, maxLimit int) int {
+	if value == nil || *value <= 0 {
+		return defaultLimit
 	}
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
+	if *value > maxLimit {
+		return maxLimit
 	}
-	return dst
+	return *value
+}
+
+func clampOffset(value *int) int {
+	if value == nil || *value < 0 {
+		return 0
+	}
+	return *value
 }
 
 func float32PtrFromFloat64(v *float64) *float32 {
@@ -108,7 +122,7 @@ func apiVariantConfigFromStorage(cfg storage.VariantConfig) *VariantConfig {
 		maxTokens := *cfg.MaxTokens
 		out.MaxTokens = &maxTokens
 	}
-	if headers := cloneStringMap(cfg.RequestHeaders); len(headers) > 0 {
+	if headers := maps.Clone(cfg.RequestHeaders); len(headers) > 0 {
 		out.RequestHeaders = &headers
 	}
 	return &out
@@ -122,18 +136,12 @@ func latestAnalysisResult(results []*storage.AnalysisResult) *storage.AnalysisRe
 	if len(results) == 0 {
 		return nil
 	}
-
-	latest := results[0]
-	for _, result := range results[1:] {
-		if result.CreatedAt.After(latest.CreatedAt) {
-			latest = result
-			continue
+	return slices.MaxFunc(results, func(a, b *storage.AnalysisResult) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
 		}
-		if result.CreatedAt.Equal(latest.CreatedAt) && result.ID > latest.ID {
-			latest = result
-		}
-	}
-	return latest
+		return cmp.Compare(a.ID, b.ID)
+	})
 }
 
 func driftResultResponse(result *storage.DriftResult) DriftResult {
