@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,10 +10,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-)
 
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
+	"github.com/lethaltrifecta/replay/pkg/storage/schema"
+	"github.com/lethaltrifecta/replay/pkg/storage/toolcaptures"
+)
 
 // PostgresStorage implements Storage interface using PostgreSQL
 type PostgresStorage struct {
@@ -28,8 +27,12 @@ func NewPostgresStorage(ctx context.Context, connectionURL string, maxConns int)
 		return nil, fmt.Errorf("failed to parse connection URL: %w", err)
 	}
 
+	minConns := maxConns / 4
+	if minConns < 1 {
+		minConns = 1
+	}
 	config.MaxConns = int32(maxConns)
-	config.MinConns = int32(maxConns / 4)
+	config.MinConns = int32(minConns)
 	config.MaxConnLifetime = time.Hour
 	config.MaxConnIdleTime = 30 * time.Minute
 
@@ -59,17 +62,7 @@ func (s *PostgresStorage) Ping(ctx context.Context) error {
 
 // Migrate runs database migrations
 func (s *PostgresStorage) Migrate(ctx context.Context) error {
-	// Read and execute migrations sequentially
-	for _, name := range []string{"001_initial_schema.sql", "002_baselines_and_drift.sql", "003_drift_unique_constraint.sql"} {
-		sql, err := migrationsFS.ReadFile("migrations/" + name)
-		if err != nil {
-			return fmt.Errorf("failed to read migration %s: %w", name, err)
-		}
-		if _, err = s.pool.Exec(ctx, string(sql)); err != nil {
-			return fmt.Errorf("failed to execute migration %s: %w", name, err)
-		}
-	}
-	return nil
+	return schema.Migrate(ctx, s.pool)
 }
 
 // CreateOTELTrace creates a new OTEL trace record
@@ -350,63 +343,62 @@ func (s *PostgresStorage) CreateToolCapture(ctx context.Context, capture *ToolCa
 
 // GetToolCapturesByTrace retrieves all tool captures for a trace.
 func (s *PostgresStorage) GetToolCapturesByTrace(ctx context.Context, traceID string) ([]*ToolCapture, error) {
-	query := `
-		SELECT id, trace_id, span_id, step_index, tool_name, args, args_hash, result, error,
-		       latency_ms, risk_class, created_at
-		FROM tool_captures
-		WHERE trace_id = $1
-		ORDER BY step_index ASC, created_at ASC, id ASC
-	`
-
-	rows, err := s.pool.Query(ctx, query, traceID)
+	captures, err := toolcaptures.NewPostgresReader(s.pool).GetByTrace(ctx, traceID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var captures []*ToolCapture
-	for rows.Next() {
-		var capture ToolCapture
-		err := rows.Scan(
-			&capture.ID, &capture.TraceID, &capture.SpanID, &capture.StepIndex, &capture.ToolName, &capture.Args,
-			&capture.ArgsHash, &capture.Result, &capture.Error, &capture.LatencyMS,
-			&capture.RiskClass, &capture.CreatedAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		captures = append(captures, &capture)
-	}
-
-	return captures, rows.Err()
+	return toStorageCaptures(captures), nil
 }
 
 // GetToolCaptureByArgs retrieves a tool capture by tool name and args hash.
 func (s *PostgresStorage) GetToolCaptureByArgs(ctx context.Context, toolName string, argsHash string) (*ToolCapture, error) {
-	query := `
-		SELECT id, trace_id, span_id, step_index, tool_name, args, args_hash, result, error,
-		       latency_ms, risk_class, created_at
-		FROM tool_captures
-		WHERE tool_name = $1 AND args_hash = $2
-		ORDER BY created_at DESC
-		LIMIT 1
-	`
-
-	var capture ToolCapture
-	err := s.pool.QueryRow(ctx, query, toolName, argsHash).Scan(
-		&capture.ID, &capture.TraceID, &capture.SpanID, &capture.StepIndex, &capture.ToolName, &capture.Args,
-		&capture.ArgsHash, &capture.Result, &capture.Error, &capture.LatencyMS,
-		&capture.RiskClass, &capture.CreatedAt,
-	)
-
-	if errors.Is(err, pgx.ErrNoRows) {
+	capture, err := toolcaptures.NewPostgresReader(s.pool).GetByArgs(ctx, toolName, argsHash)
+	if errors.Is(err, toolcaptures.ErrNotFound) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	return toStorageCapture(capture), nil
+}
 
-	return &capture, nil
+func toStorageCaptures(captures []*toolcaptures.Capture) []*ToolCapture {
+	items := make([]*ToolCapture, 0, len(captures))
+	for _, capture := range captures {
+		items = append(items, toStorageCapture(capture))
+	}
+	return items
+}
+
+func toStorageCapture(capture *toolcaptures.Capture) *ToolCapture {
+	if capture == nil {
+		return nil
+	}
+
+	args := make(JSONB, len(capture.Args))
+	for key, value := range capture.Args {
+		args[key] = value
+	}
+
+	result := make(JSONB, len(capture.Result))
+	for key, value := range capture.Result {
+		result[key] = value
+	}
+
+	return &ToolCapture{
+		ID:        capture.ID,
+		TraceID:   capture.TraceID,
+		SpanID:    capture.SpanID,
+		StepIndex: capture.StepIndex,
+		ToolName:  capture.ToolName,
+		Args:      args,
+		ArgsHash:  capture.ArgsHash,
+		Result:    result,
+		Error:     capture.Error,
+		LatencyMS: capture.LatencyMS,
+		RiskClass: capture.RiskClass,
+		CreatedAt: capture.CreatedAt,
+	}
 }
 
 // CreateExperiment creates a new experiment.
