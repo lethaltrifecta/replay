@@ -57,13 +57,13 @@ Agentgateway → OTEL Traces → OTLP Receiver → Parser → Storage
 - `gen_ai.usage.input_tokens` → Prompt tokens
 - `gen_ai.usage.output_tokens` → Completion tokens
 - `gen_ai.request.temperature` → Temperature parameter
-- Tool events → Tool calls with args/results
+- `execute_tool` spans → Tool captures with args/results
 
 **Key Methods**:
 - `ParseOTELSpan()` - Converts OTEL span to storage model
 - `IsLLMSpan()` - Checks if span contains gen_ai.* attributes
 - `ParseLLMSpan()` - Extracts LLM-specific data
-- `ParseToolCalls()` - Extracts tool calls from events
+- `ParseToolCalls()` - Extracts tool captures from `execute_tool` spans
 - `extractPrompt()` - Builds message array from attributes
 - `extractCompletion()` - Gets completion text
 - `extractParameters()` - Gets LLM parameters
@@ -104,17 +104,17 @@ gen_ai.usage.input_tokens = 42
 gen_ai.usage.output_tokens = 18
 ```
 
-### Tool Call Events
+### Tool Execution Spans
 
-Tool calls are captured as span events with attributes:
+Tool calls are captured from semconv-aligned `execute_tool` spans:
 
 ```
-Event: tool.call
-  tool.name = "search_docs"
-  tool.args = {"query": "authentication", "limit": 10}
-  tool.result = {"results": [...]}
-  tool.latency_ms = 150
-  tool.error = null
+Span: execute_tool search_docs
+  gen_ai.operation.name = "execute_tool"
+  gen_ai.tool.name = "search_docs"
+  gen_ai.tool.call.arguments = {"query": "authentication", "limit": 10}
+  gen_ai.tool.call.result = {"results": [...]}
+  error.message = null
 ```
 
 ## Risk Classification

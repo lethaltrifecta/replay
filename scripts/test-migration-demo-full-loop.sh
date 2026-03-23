@@ -3,10 +3,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AGENTGATEWAY_DIR="${AGENTGATEWAY_DIR:-$ROOT_DIR/../agentgateway}"
-FREEZE_DIR="${FREEZE_DIR:-$ROOT_DIR/../freeze-mcp}"
 CMDR_POSTGRES_URL="${CMDR_POSTGRES_URL:-postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable}"
 CMDR_OTLP_URL="${CMDR_OTLP_URL:-http://127.0.0.1:4318}"
+CMDR_API_URL="${CMDR_API_URL:-http://127.0.0.1:8080/api/v1}"
 FREEZE_URL="${FREEZE_URL:-http://127.0.0.1:9090}"
 MIGRATION_MCP_URL="${MIGRATION_MCP_URL:-http://127.0.0.1:18082}"
 MIGRATION_LLM_URL="${MIGRATION_LLM_URL:-http://127.0.0.1:18083}"
@@ -25,19 +24,42 @@ UNSAFE_VERDICT_LOG="${UNSAFE_VERDICT_LOG:-/tmp/replay-migration-unsafe-verdict.l
 REPORT_SUMMARY_FILE="${REPORT_SUMMARY_FILE:-}"
 RUN_LOG_FILE="${RUN_LOG_FILE:-}"
 CMDR_BIN="${CMDR_BIN:-}"
-
-PYTHON_BIN="${PYTHON_BIN:-}"
 GO_BIN="${GO_BIN:-}"
 
-if [ -z "$PYTHON_BIN" ]; then
-  if [ -x "$FREEZE_DIR/.venv/bin/python" ]; then
-    PYTHON_BIN="$FREEZE_DIR/.venv/bin/python"
-  elif [ -x "/tmp/freeze-venv/bin/python" ]; then
-    PYTHON_BIN="/tmp/freeze-venv/bin/python"
-  else
-    PYTHON_BIN="python3"
+resolve_repo_dir() {
+  local env_value="$1"
+  local label="$2"
+  shift 2
+
+  if [ -n "$env_value" ]; then
+    printf '%s\n' "$env_value"
+    return 0
   fi
-fi
+
+  local candidates=()
+  local candidate
+  for candidate in "$@"; do
+    if [ -d "$candidate" ]; then
+      candidates+=("$candidate")
+    fi
+  done
+
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    echo "$label checkout not found; set ${label^^}_DIR explicitly" >&2
+    return 1
+  fi
+
+  if [ "${#candidates[@]}" -gt 1 ]; then
+    echo "multiple $label checkouts found; set ${label^^}_DIR explicitly" >&2
+    printf '  candidate: %s\n' "${candidates[@]}" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${candidates[0]}"
+}
+
+AGENTGATEWAY_DIR="$(resolve_repo_dir "${AGENTGATEWAY_DIR:-}" "agentgateway" "$ROOT_DIR/../../agentgateway" "$ROOT_DIR/../agentgateway")"
+FREEZE_DIR="$(resolve_repo_dir "${FREEZE_DIR:-}" "freeze" "$ROOT_DIR/../../freeze-mcp" "$ROOT_DIR/../freeze-mcp")"
 
 if [ -z "$GO_BIN" ]; then
   GO_BIN="$(command -v go 2>/dev/null || true)"
@@ -83,6 +105,21 @@ run_cmdr() {
   (
     cd "$ROOT_DIR"
     "$GO_BIN" run ./cmd/cmdr "$@"
+  )
+}
+
+run_migration_demo_agent() {
+  run_cmdr demo internal migration-agent "$@"
+}
+
+run_migration_demo_verify() {
+  run_cmdr demo internal helper "$@"
+}
+
+run_freeze_cmd() {
+  (
+    cd "$FREEZE_DIR"
+    "$GO_BIN" run "$@"
   )
 }
 
@@ -133,19 +170,36 @@ wait_for_agentgateway_admin_clear() {
   return 1
 }
 
-wait_for_count() {
-  local query="$1"
-  local expected="$2"
+wait_for_trace_detail() {
+  local trace_id="$1"
+  local expected_steps="$2"
+  local expected_tools="$3"
+  local label="$4"
+  run_migration_demo_verify wait-trace \
+    --api-url "$CMDR_API_URL" \
+    --trace-id "$trace_id" \
+    --steps "$expected_steps" \
+    --tools "$expected_tools" \
+    --timeout 30s || {
+      echo "timed out waiting for $label"
+      return 1
+    }
+}
+
+wait_for_trace_tool_error() {
+  local trace_id="$1"
+  local expected_substring="$2"
   local label="$3"
-  for _ in $(seq 1 30); do
-    count="$(psql "$CMDR_POSTGRES_URL" -XtAc "$query" | tr -d '[:space:]')"
-    if [ "$count" = "$expected" ]; then
-      return 0
-    fi
-    sleep 1
-  done
-  echo "timed out waiting for $label"
-  return 1
+  run_migration_demo_verify wait-trace \
+    --api-url "$CMDR_API_URL" \
+    --trace-id "$trace_id" \
+    --steps 2 \
+    --tools 1 \
+    --error-substring "$expected_substring" \
+    --timeout 30s || {
+      echo "timed out waiting for $label"
+      return 1
+    }
 }
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -153,32 +207,9 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v psql >/dev/null 2>&1; then
-  echo "psql not found in PATH"
-  exit 1
-fi
-
-if ! "$PYTHON_BIN" - <<'PY' >/dev/null 2>&1
-import importlib
-for module_name in ("anyio", "httpx", "mcp.client.streamable_http", "psycopg", "fastapi", "uvicorn", "freeze_mcp"):
-    importlib.import_module(module_name)
-PY
-then
-  echo "required Python modules are missing for the migration demo"
-  echo "Expected modules: anyio, httpx, mcp, psycopg, fastapi, uvicorn, freeze_mcp"
-  exit 1
-fi
-
 docker compose up -d postgres >/dev/null
 
-for _ in $(seq 1 30); do
-  if psql "$CMDR_POSTGRES_URL" -XtAc "SELECT 1" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-
-if ! psql "$CMDR_POSTGRES_URL" -XtAc "SELECT 1" >/dev/null 2>&1; then
+if ! run_migration_demo_verify wait-postgres --url "$CMDR_POSTGRES_URL" --timeout 30s; then
   echo "PostgreSQL is not reachable at $CMDR_POSTGRES_URL"
   exit 1
 fi
@@ -192,20 +223,31 @@ if ! curl -sSf "$CMDR_OTLP_URL/health" >/dev/null 2>&1; then
   disown "$CMDR_PID" >/dev/null 2>&1 || true
   wait_for_http "$CMDR_OTLP_URL/health" "CMDR OTLP receiver"
 fi
+wait_for_http "$CMDR_API_URL/health" "CMDR API"
 
 if ! curl -sSf "$FREEZE_URL/health" >/dev/null 2>&1; then
-  CMDR_POSTGRES_URL="$CMDR_POSTGRES_URL" FREEZE_TRACE_ID="migration-demo-default" "$PYTHON_BIN" -m freeze_mcp.server >"$FREEZE_LOG" 2>&1 &
+  (
+    export CMDR_POSTGRES_URL="$CMDR_POSTGRES_URL"
+    run_freeze_cmd ./cmd/freeze-mcp-migrate
+    FREEZE_TRACE_ID="migration-demo-default" run_freeze_cmd ./cmd/freeze-mcp
+  ) >"$FREEZE_LOG" 2>&1 &
   FREEZE_PID=$!
   disown "$FREEZE_PID" >/dev/null 2>&1 || true
   wait_for_http "$FREEZE_URL/health" "freeze-mcp"
 fi
 
-"$PYTHON_BIN" "$ROOT_DIR/scripts/mock_migration_mcp_server.py" >"$MCP_LOG" 2>&1 &
+(
+  cd "$ROOT_DIR"
+  "$GO_BIN" run ./cmd/mock-migration-mcp
+) >"$MCP_LOG" 2>&1 &
 MCP_PID=$!
 disown "$MCP_PID" >/dev/null 2>&1 || true
 wait_for_http "$MIGRATION_MCP_URL/health" "mock migration MCP server"
 
-"$PYTHON_BIN" "$ROOT_DIR/scripts/mock_migration_openai_upstream.py" >"$LLM_LOG" 2>&1 &
+(
+  cd "$ROOT_DIR"
+  "$GO_BIN" run ./cmd/mock-openai-upstream --mode migration --port 18083
+) >"$LLM_LOG" 2>&1 &
 LLM_PID=$!
 disown "$LLM_PID" >/dev/null 2>&1 || true
 wait_for_port "18083" "mock migration OpenAI upstream"
@@ -219,23 +261,21 @@ disown "$CAPTURE_AGW_PID" >/dev/null 2>&1 || true
 wait_for_port "3102" "capture agentgateway AI proxy"
 wait_for_port "3103" "capture agentgateway MCP proxy"
 
-BASELINE_TRACE_ID="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(16))')"
-SAFE_REPLAY_TRACE_ID="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(16))')"
-UNSAFE_REPLAY_TRACE_ID="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(16))')"
+BASELINE_TRACE_ID="$(run_migration_demo_verify random-hex --bytes 16)"
+SAFE_REPLAY_TRACE_ID="$(run_migration_demo_verify random-hex --bytes 16)"
+UNSAFE_REPLAY_TRACE_ID="$(run_migration_demo_verify random-hex --bytes 16)"
 
 echo "Running baseline capture trace $BASELINE_TRACE_ID"
-"$PYTHON_BIN" "$ROOT_DIR/scripts/run_migration_demo_agent.py" \
+run_migration_demo_agent \
   --mode capture \
   --model migration-safe \
   --behavior safe \
   --trace-id "$BASELINE_TRACE_ID" \
-  --otlp-url "$CMDR_OTLP_URL" \
   --llm-url "$CAPTURE_LLM_URL" \
   --mcp-url "$CAPTURE_MCP_URL" \
   --expect-final-substring "Migration completed safely"
 
-wait_for_count "SELECT COUNT(*) FROM replay_traces WHERE trace_id = '$BASELINE_TRACE_ID'" "5" "baseline replay traces"
-wait_for_count "SELECT COUNT(*) FROM tool_captures WHERE trace_id = '$BASELINE_TRACE_ID'" "4" "baseline tool captures"
+wait_for_trace_detail "$BASELINE_TRACE_ID" "5" "4" "baseline trace detail"
 
 if [ -n "$CAPTURE_AGW_PID" ] && kill -0 "$CAPTURE_AGW_PID" >/dev/null 2>&1; then
   kill "$CAPTURE_AGW_PID" >/dev/null 2>&1 || true
@@ -258,35 +298,32 @@ wait_for_port "3202" "replay agentgateway AI proxy"
 wait_for_port "3203" "replay agentgateway MCP proxy"
 
 echo "Running safe frozen replay trace $SAFE_REPLAY_TRACE_ID"
-"$PYTHON_BIN" "$ROOT_DIR/scripts/run_migration_demo_agent.py" \
+run_migration_demo_agent \
   --mode replay \
   --model migration-safe \
   --behavior safe \
   --trace-id "$SAFE_REPLAY_TRACE_ID" \
   --freeze-trace-id "$BASELINE_TRACE_ID" \
-  --otlp-url "$CMDR_OTLP_URL" \
   --llm-url "$REPLAY_LLM_URL" \
   --mcp-url "$REPLAY_MCP_URL" \
   --expect-final-substring "Migration completed safely"
 
-wait_for_count "SELECT COUNT(*) FROM replay_traces WHERE trace_id = '$SAFE_REPLAY_TRACE_ID'" "5" "safe replay traces"
-wait_for_count "SELECT COUNT(*) FROM tool_captures WHERE trace_id = '$SAFE_REPLAY_TRACE_ID'" "4" "safe replay tool captures"
+wait_for_trace_detail "$SAFE_REPLAY_TRACE_ID" "5" "4" "safe replay trace detail"
 
 echo "Running unsafe frozen replay trace $UNSAFE_REPLAY_TRACE_ID"
-"$PYTHON_BIN" "$ROOT_DIR/scripts/run_migration_demo_agent.py" \
+run_migration_demo_agent \
   --mode replay \
   --model migration-unsafe \
   --behavior unsafe \
   --trace-id "$UNSAFE_REPLAY_TRACE_ID" \
   --freeze-trace-id "$BASELINE_TRACE_ID" \
-  --otlp-url "$CMDR_OTLP_URL" \
   --llm-url "$REPLAY_LLM_URL" \
   --mcp-url "$REPLAY_MCP_URL" \
   --expect-final-substring "blocked" \
   --expect-tool-error
 
-wait_for_count "SELECT COUNT(*) FROM replay_traces WHERE trace_id = '$UNSAFE_REPLAY_TRACE_ID'" "2" "unsafe replay traces"
-wait_for_count "SELECT COUNT(*) FROM tool_captures WHERE trace_id = '$UNSAFE_REPLAY_TRACE_ID'" "1" "unsafe replay tool captures"
+wait_for_trace_detail "$UNSAFE_REPLAY_TRACE_ID" "2" "1" "unsafe replay trace detail"
+wait_for_trace_tool_error "$UNSAFE_REPLAY_TRACE_ID" "tool_not_captured" "unsafe replay tool error"
 
 echo
 echo "CMDR verdict: safe replay"
@@ -309,45 +346,20 @@ echo "CMDR verdict: unsafe replay"
 ) | tee "$UNSAFE_VERDICT_LOG"
 
 if [ -n "$REPORT_SUMMARY_FILE" ]; then
-  REPORT_SUMMARY_FILE="$REPORT_SUMMARY_FILE" \
-  BASELINE_TRACE_ID="$BASELINE_TRACE_ID" \
-  SAFE_REPLAY_TRACE_ID="$SAFE_REPLAY_TRACE_ID" \
-  UNSAFE_REPLAY_TRACE_ID="$UNSAFE_REPLAY_TRACE_ID" \
-  CMDR_LOG="$CMDR_LOG" \
-  FREEZE_LOG="$FREEZE_LOG" \
-  MCP_LOG="$MCP_LOG" \
-  LLM_LOG="$LLM_LOG" \
-  CAPTURE_AGW_LOG="$CAPTURE_AGW_LOG" \
-  REPLAY_AGW_LOG="$REPLAY_AGW_LOG" \
-  SAFE_VERDICT_LOG="$SAFE_VERDICT_LOG" \
-  UNSAFE_VERDICT_LOG="$UNSAFE_VERDICT_LOG" \
-  "$PYTHON_BIN" - <<'PY'
-import json
-import os
-from pathlib import Path
-
-payload = {
-    "scenario": "database-migration",
-    "baseline_trace_id": os.environ["BASELINE_TRACE_ID"],
-    "safe_replay_trace_id": os.environ["SAFE_REPLAY_TRACE_ID"],
-    "unsafe_replay_trace_id": os.environ["UNSAFE_REPLAY_TRACE_ID"],
-    "logs": {
-        "run_log": os.environ.get("RUN_LOG_FILE", ""),
-        "cmdr": os.environ["CMDR_LOG"],
-        "freeze_mcp": os.environ["FREEZE_LOG"],
-        "migration_mcp": os.environ["MCP_LOG"],
-        "mock_llm": os.environ["LLM_LOG"],
-        "capture_agentgateway": os.environ["CAPTURE_AGW_LOG"],
-        "replay_agentgateway": os.environ["REPLAY_AGW_LOG"],
-        "safe_verdict": os.environ["SAFE_VERDICT_LOG"],
-        "unsafe_verdict": os.environ["UNSAFE_VERDICT_LOG"],
-    },
-}
-
-summary_path = Path(os.environ["REPORT_SUMMARY_FILE"])
-summary_path.parent.mkdir(parents=True, exist_ok=True)
-summary_path.write_text(json.dumps(payload, indent=2) + "\n")
-PY
+  run_migration_demo_verify write-summary \
+    --output "$REPORT_SUMMARY_FILE" \
+    --baseline-trace-id "$BASELINE_TRACE_ID" \
+    --safe-replay-trace-id "$SAFE_REPLAY_TRACE_ID" \
+    --unsafe-replay-trace-id "$UNSAFE_REPLAY_TRACE_ID" \
+    --run-log "$RUN_LOG_FILE" \
+    --cmdr-log "$CMDR_LOG" \
+    --freeze-log "$FREEZE_LOG" \
+    --migration-mcp-log "$MCP_LOG" \
+    --mock-llm-log "$LLM_LOG" \
+    --capture-agentgateway-log "$CAPTURE_AGW_LOG" \
+    --replay-agentgateway-log "$REPLAY_AGW_LOG" \
+    --safe-verdict-log "$SAFE_VERDICT_LOG" \
+    --unsafe-verdict-log "$UNSAFE_VERDICT_LOG"
 fi
 
 echo

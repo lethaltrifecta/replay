@@ -3,12 +3,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AGENTGATEWAY_DIR="${AGENTGATEWAY_DIR:-$ROOT_DIR/../agentgateway}"
-FREEZE_DIR="${FREEZE_DIR:-$ROOT_DIR/../freeze-mcp}"
 AGW_CONFIG="${AGW_CONFIG:-$ROOT_DIR/scripts/agentgateway-freeze-loop.yaml}"
-MIGRATIONS_DIR="${MIGRATIONS_DIR:-$ROOT_DIR/pkg/storage/migrations}"
 CMDR_POSTGRES_URL="${CMDR_POSTGRES_URL:-postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable}"
 CMDR_OTLP_URL="${CMDR_OTLP_URL:-http://127.0.0.1:4318}"
+CMDR_API_URL="${CMDR_API_URL:-http://127.0.0.1:8080/api/v1}"
 FREEZE_URL="${FREEZE_URL:-http://127.0.0.1:9090}"
 AGW_PORT="${AGW_PORT:-3002}"
 MCP_PROXY_PORT="${MCP_PROXY_PORT:-3003}"
@@ -24,22 +22,46 @@ EXPECT_SUBSTRING="${EXPECT_SUBSTRING:-8}"
 BASELINE_COMPLETION_TEXT="${BASELINE_COMPLETION_TEXT:-I will use the calculator.}"
 MOCK_LOG="${MOCK_LOG:-/tmp/replay-mock-toolloop.log}"
 AGW_LOG="${AGW_LOG:-/tmp/replay-agentgateway-toolloop.log}"
-
-PYTHON_BIN="${PYTHON_BIN:-}"
-if [ -z "$PYTHON_BIN" ]; then
-  if [ -x "$FREEZE_DIR/.venv/bin/python" ]; then
-    PYTHON_BIN="$FREEZE_DIR/.venv/bin/python"
-  else
-    PYTHON_BIN="python3"
-  fi
-fi
-
-if [ -z "$TRACE_ID" ]; then
-  TRACE_ID="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(16))')"
-fi
+GO_BIN="${GO_BIN:-}"
+CMDR_BIN="${CMDR_BIN:-}"
 
 MOCK_PID=""
 AGW_PID=""
+
+resolve_repo_dir() {
+  local env_value="$1"
+  local label="$2"
+  shift 2
+
+  if [ -n "$env_value" ]; then
+    printf '%s\n' "$env_value"
+    return 0
+  fi
+
+  local candidates=()
+  local candidate
+  for candidate in "$@"; do
+    if [ -d "$candidate" ]; then
+      candidates+=("$candidate")
+    fi
+  done
+
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    echo "$label checkout not found; set ${label^^}_DIR explicitly" >&2
+    return 1
+  fi
+
+  if [ "${#candidates[@]}" -gt 1 ]; then
+    echo "multiple $label checkouts found; set ${label^^}_DIR explicitly" >&2
+    printf '  candidate: %s\n' "${candidates[@]}" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${candidates[0]}"
+}
+
+AGENTGATEWAY_DIR="$(resolve_repo_dir "${AGENTGATEWAY_DIR:-}" "agentgateway" "$ROOT_DIR/../../agentgateway" "$ROOT_DIR/../agentgateway")"
+FREEZE_DIR="$(resolve_repo_dir "${FREEZE_DIR:-}" "freeze" "$ROOT_DIR/../../freeze-mcp" "$ROOT_DIR/../freeze-mcp")"
 
 cleanup() {
   if [ -n "$AGW_PID" ] && kill -0 "$AGW_PID" >/dev/null 2>&1; then
@@ -54,22 +76,30 @@ cleanup() {
 
 trap cleanup EXIT
 
-wait_for_count() {
-  local query="$1"
-  local expected="$2"
-  local label="$3"
+run_cmdr() {
+  if [ -n "$CMDR_BIN" ]; then
+    "$CMDR_BIN" "$@"
+    return
+  fi
+  (
+    cd "$ROOT_DIR"
+    "$GO_BIN" run ./cmd/cmdr "$@"
+  )
+}
 
-  for _ in $(seq 1 30); do
-    local count
-    count="$(psql "$CMDR_POSTGRES_URL" -XtAc "$query" | tr -d '[:space:]')"
-    if [ "$count" = "$expected" ]; then
-      return 0
-    fi
-    sleep 1
-  done
+run_openai_mock() {
+  (
+    cd "$ROOT_DIR"
+    "$GO_BIN" run ./cmd/mock-openai-upstream "$@"
+  )
+}
 
-  echo "timed out waiting for $label"
-  return 1
+run_freeze_capture() {
+  run_cmdr demo internal freeze-capture "$@"
+}
+
+run_freeze_agent_loop() {
+  run_cmdr demo internal freeze-loop "$@"
 }
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -77,42 +107,26 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v psql >/dev/null 2>&1; then
-  echo "psql not found in PATH"
-  exit 1
+if [ -z "$GO_BIN" ]; then
+  GO_BIN="$(command -v go 2>/dev/null || true)"
+  if [ -z "$GO_BIN" ]; then
+    echo "go not found in PATH; set GO_BIN explicitly"
+    exit 1
+  fi
 fi
 
-if ! psql "$CMDR_POSTGRES_URL" -XtAc "SELECT 1" >/dev/null 2>&1; then
+if [ -z "$TRACE_ID" ]; then
+  TRACE_ID="$(run_cmdr demo internal helper random-hex --bytes 16)"
+fi
+
+if ! run_cmdr demo internal helper wait-postgres --url "$CMDR_POSTGRES_URL" --timeout 30s; then
   echo "PostgreSQL is not reachable at $CMDR_POSTGRES_URL"
   exit 1
-fi
-
-if [ ! -f "$MIGRATIONS_DIR/001_initial_schema.sql" ] || [ ! -f "$MIGRATIONS_DIR/002_baselines_and_drift.sql" ] || [ ! -f "$MIGRATIONS_DIR/003_drift_unique_constraint.sql" ]; then
-  echo "CMDR migration files not found in $MIGRATIONS_DIR"
-  exit 1
-fi
-
-if [ "$(psql "$CMDR_POSTGRES_URL" -XtAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'tool_captures'")" != "1" ]; then
-  echo "tool_captures not found; applying CMDR migrations..."
-  psql "$CMDR_POSTGRES_URL" -v ON_ERROR_STOP=1 -f "$MIGRATIONS_DIR/001_initial_schema.sql" >/dev/null
-  psql "$CMDR_POSTGRES_URL" -v ON_ERROR_STOP=1 -f "$MIGRATIONS_DIR/002_baselines_and_drift.sql" >/dev/null
-  psql "$CMDR_POSTGRES_URL" -v ON_ERROR_STOP=1 -f "$MIGRATIONS_DIR/003_drift_unique_constraint.sql" >/dev/null
 fi
 
 if ! curl -sSf "$FREEZE_URL/health" >/dev/null 2>&1; then
   echo "freeze-mcp is not listening on $FREEZE_URL"
   echo "Start it first from $FREEZE_DIR"
-  exit 1
-fi
-
-if ! PYTHONPATH="$FREEZE_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" - <<'PY' > /dev/null 2>&1
-import importlib
-for module_name in ("anyio", "httpx", "mcp.client.streamable_http", "mcp.client.session", "psycopg", "freeze_mcp.matcher"):
-    importlib.import_module(module_name)
-PY
-then
-  echo "required Python deps are missing for the freeze-mcp agent loop"
-  echo "Expected modules: anyio, httpx, mcp, psycopg, freeze_mcp"
   exit 1
 fi
 
@@ -122,8 +136,13 @@ if [ "$BASELINE_SOURCE" = "cmdr" ]; then
     echo "Start cmdr serve first, or use BASELINE_SOURCE=seed for the direct fallback"
     exit 1
   fi
+  if ! curl -sSf "$CMDR_API_URL/health" >/dev/null 2>&1; then
+    echo "CMDR API is not listening on $CMDR_API_URL/health"
+    echo "Start cmdr serve first, or use BASELINE_SOURCE=seed for the direct fallback"
+    exit 1
+  fi
 
-  "$PYTHON_BIN" "$ROOT_DIR/scripts/capture_freeze_baseline.py" \
+  run_freeze_capture \
     --otlp-url "$CMDR_OTLP_URL" \
     --trace-id "$TRACE_ID" \
     --prompt "$PROMPT_TEXT" \
@@ -132,54 +151,23 @@ if [ "$BASELINE_SOURCE" = "cmdr" ]; then
     --tool-args "$TOOL_ARGS_JSON" \
     --tool-result "$EXPECTED_RESULT_JSON"
 
-  wait_for_count "SELECT COUNT(*) FROM replay_traces WHERE trace_id = '$TRACE_ID'" "1" "replay_traces row for $TRACE_ID"
-  wait_for_count "SELECT COUNT(*) FROM tool_captures WHERE trace_id = '$TRACE_ID'" "1" "tool_captures row for $TRACE_ID"
+  run_cmdr demo internal helper wait-trace \
+    --api-url "$CMDR_API_URL" \
+    --trace-id "$TRACE_ID" \
+    --steps 1 \
+    --tools 1 \
+    --timeout 30s
 else
-  export TRACE_ID TOOL_NAME TOOL_ARGS_JSON EXPECTED_RESULT_JSON CMDR_POSTGRES_URL
-  PYTHONPATH="$FREEZE_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" - <<'PY'
-import json
-import os
-from datetime import datetime, timezone
-from uuid import uuid4
-
-import psycopg
-
-from freeze_mcp.matcher import calculate_args_hash
-
-trace_id = os.environ["TRACE_ID"]
-tool_name = os.environ["TOOL_NAME"]
-tool_args = json.loads(os.environ["TOOL_ARGS_JSON"])
-result = json.loads(os.environ["EXPECTED_RESULT_JSON"])
-args_hash = calculate_args_hash(tool_args)
-span_id = f"loop-span-{uuid4().hex[:12]}"
-step_index = int(datetime.now(timezone.utc).timestamp()) % 100000
-
-with psycopg.connect(os.environ["CMDR_POSTGRES_URL"]) as conn:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO tool_captures
-            (trace_id, span_id, step_index, tool_name, args, args_hash, result, error, latency_ms, risk_class)
-            VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, NULL, 5, 'read')
-            """,
-            (
-                trace_id,
-                span_id,
-                step_index,
-                tool_name,
-                json.dumps(tool_args),
-                args_hash,
-                json.dumps(result),
-            ),
-        )
-    conn.commit()
-
-print(f"seeded tool capture trace_id={trace_id} args_hash={args_hash}")
-PY
+  run_cmdr demo internal helper seed-tool-capture \
+    --postgres-url "$CMDR_POSTGRES_URL" \
+    --trace-id "$TRACE_ID" \
+    --tool-name "$TOOL_NAME" \
+    --tool-args "$TOOL_ARGS_JSON" \
+    --tool-result "$EXPECTED_RESULT_JSON"
 fi
 
-PYTHONPATH="$FREEZE_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" \
-  "$ROOT_DIR/scripts/mock_toolcall_openai_upstream.py" \
+run_openai_mock \
+  --mode toolloop \
   --port "$MOCK_PORT" \
   --tool-name "$TOOL_NAME" \
   --tool-args "$TOOL_ARGS_JSON" \
@@ -235,8 +223,7 @@ if [ "$MCP_TRANSPORT_MODE" = "agentgateway" ]; then
   MCP_URL="http://127.0.0.1:$MCP_PROXY_PORT/mcp/"
 fi
 
-PYTHONPATH="$FREEZE_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" \
-  "$ROOT_DIR/scripts/run_freeze_agent_loop.py" \
+run_freeze_agent_loop \
   --llm-url "http://127.0.0.1:$AGW_PORT" \
   --mcp-url "$MCP_URL" \
   --freeze-trace-id "$TRACE_ID" \

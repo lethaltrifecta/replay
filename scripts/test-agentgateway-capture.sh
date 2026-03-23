@@ -3,11 +3,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AGENTGATEWAY_DIR="${AGENTGATEWAY_DIR:-$ROOT_DIR/../agentgateway}"
 AGW_CONFIG="${AGW_CONFIG:-$ROOT_DIR/scripts/agentgateway-cmdr-capture.yaml}"
-CMDR_POSTGRES_URL="${CMDR_POSTGRES_URL:-postgres://cmdr@localhost:5432/cmdr?sslmode=disable}"
 AGW_PORT="${AGW_PORT:-3001}"
 MOCK_PORT="${MOCK_PORT:-18080}"
+CMDR_OTLP_HEALTH_URL="${CMDR_OTLP_HEALTH_URL:-http://127.0.0.1:4318/health}"
+CMDR_API_URL="${CMDR_API_URL:-http://127.0.0.1:8080/api/v1}"
+GO_BIN="${GO_BIN:-}"
+CMDR_BIN="${CMDR_BIN:-}"
 RUN_ID="${RUN_ID:-$(date +%s)}"
 PROMPT_TEXT="${PROMPT_TEXT:-Explain the outage briefly. run ${RUN_ID}}"
 MOCK_TEXT="${MOCK_TEXT:-Mock response from local upstream.}"
@@ -18,6 +20,51 @@ REQUEST_BODY="{\"model\":\"mock-model\",\"messages\":[{\"role\":\"user\",\"conte
 
 MOCK_PID=""
 AGW_PID=""
+
+run_cmdr() {
+  if [ -n "$CMDR_BIN" ]; then
+    "$CMDR_BIN" "$@"
+    return
+  fi
+  (
+    cd "$ROOT_DIR"
+    "$GO_BIN" run ./cmd/cmdr "$@"
+  )
+}
+
+resolve_repo_dir() {
+  local env_value="$1"
+  local label="$2"
+  shift 2
+
+  if [ -n "$env_value" ]; then
+    printf '%s\n' "$env_value"
+    return 0
+  fi
+
+  local candidates=()
+  local candidate
+  for candidate in "$@"; do
+    if [ -d "$candidate" ]; then
+      candidates+=("$candidate")
+    fi
+  done
+
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    echo "$label checkout not found; set ${label^^}_DIR explicitly" >&2
+    return 1
+  fi
+
+  if [ "${#candidates[@]}" -gt 1 ]; then
+    echo "multiple $label checkouts found; set ${label^^}_DIR explicitly" >&2
+    printf '  candidate: %s\n' "${candidates[@]}" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${candidates[0]}"
+}
+
+AGENTGATEWAY_DIR="$(resolve_repo_dir "${AGENTGATEWAY_DIR:-}" "agentgateway" "$ROOT_DIR/../../agentgateway" "$ROOT_DIR/../agentgateway")"
 
 cleanup() {
   if [ -n "$AGW_PID" ] && kill -0 "$AGW_PID" >/dev/null 2>&1; then
@@ -37,26 +84,33 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 not found in PATH"
-  exit 1
+if [ -z "$GO_BIN" ]; then
+  GO_BIN="$(command -v go 2>/dev/null || true)"
+  if [ -z "$GO_BIN" ]; then
+    echo "go not found in PATH; set GO_BIN explicitly"
+    exit 1
+  fi
 fi
 
-if ! command -v psql >/dev/null 2>&1; then
-  echo "psql not found in PATH"
-  exit 1
-fi
-
-if ! curl -sSf http://127.0.0.1:4318/health >/dev/null 2>&1; then
-  echo "CMDR is not listening on http://127.0.0.1:4318/health"
+if ! curl -sSf "$CMDR_OTLP_HEALTH_URL" >/dev/null 2>&1; then
+  echo "CMDR OTLP receiver is not listening on $CMDR_OTLP_HEALTH_URL"
   echo "Start it first with cmdr serve"
   exit 1
 fi
 
-python3 "$ROOT_DIR/scripts/mock_openai_upstream.py" \
-  --port "$MOCK_PORT" \
-  --response-text "$MOCK_TEXT" \
-  >"$MOCK_LOG" 2>&1 &
+if ! curl -sSf "$CMDR_API_URL/health" >/dev/null 2>&1; then
+  echo "CMDR API is not listening on $CMDR_API_URL/health"
+  echo "Start it first with cmdr serve"
+  exit 1
+fi
+
+(
+  cd "$ROOT_DIR"
+  "$GO_BIN" run ./cmd/mock-openai-upstream \
+    --mode basic \
+    --port "$MOCK_PORT" \
+    --response-text "$MOCK_TEXT"
+) >"$MOCK_LOG" 2>&1 &
 MOCK_PID=$!
 disown "$MOCK_PID" >/dev/null 2>&1 || true
 
@@ -96,38 +150,15 @@ curl -sS "http://127.0.0.1:$AGW_PORT/v1/chat/completions" \
   -d "$REQUEST_BODY"
 echo
 
-TRACE_ID=""
-for _ in $(seq 1 30); do
-  TRACE_ID="$(psql -X -A -t -P pager=off "$CMDR_POSTGRES_URL" \
-    -v prompt_text="$PROMPT_TEXT" -c \
-    "SELECT trace_id
-     FROM replay_traces
-     WHERE prompt::text LIKE '%' || :'prompt_text' || '%'
-     ORDER BY created_at DESC
-     LIMIT 1;" | tr -d '[:space:]')"
-  if [ -n "$TRACE_ID" ]; then
-    break
-  fi
-  sleep 1
-done
+TRACE_DETAIL_JSON="$(
+  run_cmdr demo internal helper wait-trace-content \
+    --api-url "$CMDR_API_URL" \
+    --prompt "$PROMPT_TEXT" \
+    --completion "$MOCK_TEXT" \
+    --timeout 30s
+)"
 
-if [ -z "$TRACE_ID" ]; then
-  echo "timed out waiting for replay_traces row for prompt: $PROMPT_TEXT"
-  exit 1
-fi
-
-psql -X -P pager=off "$CMDR_POSTGRES_URL" \
-  -v trace_id="$TRACE_ID" -c \
-  "SELECT trace_id, provider, model, prompt::text, completion, prompt_tokens, completion_tokens
-   FROM replay_traces
-   WHERE trace_id = :'trace_id';"
-
-psql -X -P pager=off "$CMDR_POSTGRES_URL" \
-  -v trace_id="$TRACE_ID" -c \
-  "SELECT trace_id, service_name, span_kind, attributes->>'gen_ai.provider.name' AS provider_name,
-          attributes->>'gen_ai.prompt.0.content' AS prompt0
-   FROM otel_traces
-   WHERE trace_id = :'trace_id';"
+echo "$TRACE_DETAIL_JSON"
 
 echo "mock upstream log: $MOCK_LOG"
 echo "agentgateway log: $AGW_LOG"
