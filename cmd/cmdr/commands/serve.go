@@ -112,6 +112,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	apiServer := api.NewServer(api.ServerConfig{
 		Port:                 cfg.APIPort,
 		MaxConcurrentReplays: cfg.MaxConcurrentReplays,
+		MCPURL:               cfg.MCPURL,
+		AgentLoopMaxTurns:    cfg.AgentLoopMaxTurns,
 	}, store, completer, log)
 
 	apiDone := make(chan error, 1)

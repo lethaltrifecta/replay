@@ -11,6 +11,10 @@ export type GateCheckRequest = {
     temperature?: number;
     topP?: number;
     maxTokens?: number;
+    /**
+     * Maximum agent loop turns (overrides server default)
+     */
+    maxTurns?: number;
     requestHeaders?: ReplayRequestHeaders;
 };
 

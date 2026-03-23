@@ -68,6 +68,8 @@ services:
       CMDR_LOG_LEVEL: debug
       CMDR_POSTGRES_URL: postgres://cmdr:cmdr_dev_password@postgres:5432/cmdr?sslmode=disable
       CMDR_AGENTGATEWAY_URL: http://agentgateway:3001
+      CMDR_MCP_URL: http://freeze-mcp:9090/mcp
+      CMDR_AGENT_LOOP_MAX_TURNS: "8"
       CMDR_OTLP_GRPC_ENDPOINT: 0.0.0.0:4317
       CMDR_OTLP_HTTP_ENDPOINT: 0.0.0.0:4318
     ports:
@@ -84,7 +86,7 @@ services:
   # --- Mock LLM (OpenAI-compatible) ---
 
   mock-llm:
-    image: golang:1.24
+    image: golang:1.26
     container_name: cmdr-dev-mock-llm
     working_dir: /app
     volumes:
@@ -124,16 +126,26 @@ services:
   # --- freeze-mcp (frozen tool responses) ---
 
   freeze-mcp:
-    build: ../freeze-mcp
+    build:
+      context: ..
+      dockerfile: replay/dockerfiles/freeze-mcp.dev.Dockerfile
     container_name: cmdr-dev-freeze-mcp
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       CMDR_POSTGRES_URL: postgres://cmdr:cmdr_dev_password@postgres:5432/cmdr?sslmode=disable
+      FREEZE_TRACE_ID: "default"
       FREEZE_PORT: "9090"
+      LOG_LEVEL: debug
     ports:
       - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
 volumes:
   dev_postgres_data:

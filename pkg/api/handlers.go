@@ -326,7 +326,28 @@ func (s *Server) CreateGateCheck(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer func() { <-s.sem }()
-		RunGatePipeline(s.ctx, s.store, engine, prepared, threshold, s.log)
+
+		var toolExec replay.ToolExecutor
+		if s.mcpURL != "" {
+			freezeHeaders := FreezeHeaders(storageRequestHeadersFromAPI(req.RequestHeaders), req.BaselineTraceId)
+			te, mcpErr := replay.NewMCPToolExecutor(s.ctx, s.mcpURL, freezeHeaders)
+			if mcpErr != nil {
+				s.log.Warnw("MCP connection failed, falling back to prompt-only replay",
+					"experiment_id", prepared.ExperimentID,
+					"mcp_url", s.mcpURL,
+					"error", mcpErr,
+				)
+			} else {
+				toolExec = te
+				defer func() { _ = te.Close() }()
+			}
+		}
+
+		loopCfg := replay.AgentLoopConfig{MaxTurns: s.agentLoopMaxTurns}
+		if req.MaxTurns != nil && *req.MaxTurns > 0 {
+			loopCfg.MaxTurns = *req.MaxTurns
+		}
+		RunGatePipeline(s.ctx, s.store, engine, prepared, threshold, s.log, toolExec, loopCfg)
 	}()
 }
 
@@ -415,6 +436,20 @@ var allowedRequestHeaders = map[string]bool{
 	http.CanonicalHeaderKey("X-Freeze-Trace-ID"):   true,
 	http.CanonicalHeaderKey("X-Freeze-Span-ID"):    true,
 	http.CanonicalHeaderKey("X-Freeze-Step-Index"): true,
+}
+
+// FreezeHeaders returns a copy of headers with X-Freeze-Trace-ID defaulted to
+// baselineTraceID when not already present. The returned map is always non-nil.
+func FreezeHeaders(headers map[string]string, baselineTraceID string) map[string]string {
+	out := make(map[string]string, len(headers)+1)
+	for k, v := range headers {
+		out[k] = v
+	}
+	key := http.CanonicalHeaderKey("X-Freeze-Trace-ID")
+	if _, ok := out[key]; !ok {
+		out[key] = baselineTraceID
+	}
+	return out
 }
 
 // SanitizeRequestHeaders canonicalizes keys and filters to the allowlist.

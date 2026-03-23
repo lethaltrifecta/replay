@@ -37,6 +37,10 @@ type Config struct {
 	WorkerPoolSize       int `envconfig:"WORKER_POOL_SIZE" default:"10"`
 	MaxConcurrentReplays int `envconfig:"MAX_CONCURRENT_REPLAYS" default:"5"`
 
+	// Agent Loop configuration
+	MCPURL            string `envconfig:"MCP_URL"`
+	AgentLoopMaxTurns int    `envconfig:"AGENT_LOOP_MAX_TURNS" default:"8"`
+
 	// Evaluation configuration
 	LLMJudgeModel string        `envconfig:"LLM_JUDGE_MODEL" default:"claude-3-5-sonnet-20241022"`
 	EvalTimeout   time.Duration `envconfig:"EVAL_TIMEOUT" default:"120s"`
