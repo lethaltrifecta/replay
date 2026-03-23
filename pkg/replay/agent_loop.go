@@ -197,7 +197,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 
 		// Execute each tool call
 		diverged := false
-		for _, tc := range assistantMsg.ToolCalls {
+		for tcIdx, tc := range assistantMsg.ToolCalls {
 			var toolArgs map[string]any
 			// Use json.Number to preserve int64 precision for large values (>2^53).
 			// freeze-mcp hashes the exact numeric payload, so float64 rounding would
@@ -213,10 +213,23 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 			argsHash := otelreceiver.CalculateCaptureArgsHash(argsJSONB)
 
 			// Set per-call locator if we have a matching baseline capture.
-			if matched := captureQ.match(tc.Function.Name, argsHash); matched != nil {
+			// If the queue had matching entries but all are consumed, the variant
+			// is making more calls than the baseline — treat as divergence.
+			matched := captureQ.match(tc.Function.Name, argsHash)
+			if matched != nil {
 				if locator, ok := toolExec.(ToolLocator); ok {
 					locator.SetLocator(matched.SpanID, matched.StepIndex)
 				}
+			} else if captureQ.exhausted(tc.Function.Name, argsHash) {
+				result.Divergences = append(result.Divergences, DivergenceEvent{
+					Turn:      turn,
+					ToolName:  tc.Function.Name,
+					ErrorType: "baseline_exhausted",
+					Message:   fmt.Sprintf("variant called %s more times than the baseline captured", tc.Function.Name),
+				})
+				result.StopReason = StopReasonDivergence
+				diverged = true
+				break
 			}
 
 			toolResult, toolErr := toolExec.CallTool(ctx, tc.Function.Name, toolArgs)
@@ -230,10 +243,12 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 				return agentLoopFail(e, result, exp, variantRun, fmt.Sprintf("tool call %s turn %d", tc.Function.Name, turn), toolErr)
 			}
 
-			// Store ToolCapture (non-fatal if it fails — audit data)
+			// Store ToolCapture with a unique SpanID per tool call so multi-tool
+			// turns don't collide on the (trace_id, span_id, step_index) constraint.
+			captureSpanID := fmt.Sprintf("%s-tc%d", variantTrace.SpanID, tcIdx)
 			capture := &storage.ToolCapture{
 				TraceID:   variantTraceID,
-				SpanID:    variantTrace.SpanID,
+				SpanID:    captureSpanID,
 				StepIndex: turn,
 				ToolName:  tc.Function.Name,
 				Args:      argsJSONB,
@@ -345,4 +360,28 @@ func (q *captureQueue) match(toolName, argsHash string) *storage.ToolCapture {
 		}
 	}
 	return nil
+}
+
+// exhausted returns true if the queue contains entries matching tool_name and
+// args_hash but all of them have already been consumed by match(). This
+// detects the case where the variant makes more calls than the baseline.
+func (q *captureQueue) exhausted(toolName, argsHash string) bool {
+	if q == nil {
+		return false
+	}
+	for i, cap := range q.captures {
+		if cap.ToolName == toolName && cap.ArgsHash == argsHash {
+			if !q.used[i] {
+				return false // still has an unused match
+			}
+			// found at least one used match — keep scanning for unused
+		}
+	}
+	// Return true only if we found at least one (used) match
+	for _, cap := range q.captures {
+		if cap.ToolName == toolName && cap.ArgsHash == argsHash {
+			return true
+		}
+	}
+	return false
 }

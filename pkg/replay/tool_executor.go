@@ -42,10 +42,23 @@ type MCPToolExecutor struct {
 
 // NewMCPToolExecutor creates an MCP-backed ToolExecutor.
 // headers should carry freeze-scoping headers like X-Freeze-Trace-ID.
+// Per-call locator headers (X-Freeze-Span-Id, X-Freeze-Step-Index) are stripped
+// from the base headers since they are set dynamically via the ToolLocator interface.
 func NewMCPToolExecutor(ctx context.Context, mcpURL string, headers map[string]string) (*MCPToolExecutor, error) {
+	// Strip per-call locator headers — these must only flow through SetLocator.
+	baseHeaders := make(map[string]string, len(headers))
+	for k, v := range headers {
+		canonical := http.CanonicalHeaderKey(k)
+		if canonical == http.CanonicalHeaderKey("X-Freeze-Span-Id") ||
+			canonical == http.CanonicalHeaderKey("X-Freeze-Step-Index") {
+			continue
+		}
+		baseHeaders[k] = v
+	}
+
 	rt := &freezeRoundTripper{
 		base:    http.DefaultTransport,
-		headers: headers,
+		headers: baseHeaders,
 	}
 
 	httpClient := &http.Client{

@@ -589,3 +589,164 @@ func TestAgentLoop_LocatorMatchesBaselineCaptures(t *testing.T) {
 	// Verify ClearLocator was called after each tool call
 	assert.Equal(t, 2, toolExec.clearLocatorCalls)
 }
+
+func TestAgentLoop_BaselineExhausted_Diverges(t *testing.T) {
+	// Baseline has 1 capture for get_weather({"city":"SF"}).
+	// Variant calls it twice → second call should trigger baseline_exhausted divergence.
+	argsJSON := storage.JSONB{"city": "SF"}
+	argsHash := otelreceiver.CalculateCaptureArgsHash(argsJSON)
+
+	store := newMockStorage()
+	store.replayTraces["baseline-trace-123"] = []*storage.ReplayTrace{
+		makeBaselineStep(0, storage.JSONB{
+			"messages": []any{
+				map[string]any{"role": "user", "content": "Check weather"},
+			},
+			"tools": []any{
+				map[string]any{
+					"type": "function",
+					"function": map[string]any{
+						"name": "get_weather",
+					},
+				},
+			},
+		}, 100),
+	}
+
+	// Only 1 baseline capture
+	store.toolCaptures = map[string][]*storage.ToolCapture{
+		"baseline-trace-123": {
+			{
+				TraceID:  "baseline-trace-123",
+				SpanID:   "span-aaa",
+				ToolName: "get_weather",
+				ArgsHash: argsHash,
+			},
+		},
+	}
+
+	completer := &mockCompleter{
+		responses: []*agwclient.CompletionResponse{
+			// Turn 0: calls get_weather twice in one turn
+			completionWithToolCalls("gpt-4o", "", []agwclient.ToolCallResponse{
+				toolCallResponse("call-1", "get_weather", `{"city":"SF"}`),
+				toolCallResponse("call-2", "get_weather", `{"city":"SF"}`),
+			}, 100),
+		},
+	}
+
+	engine := NewEngine(store, completer)
+	prepared, err := engine.Setup(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"}, 0.8)
+	require.NoError(t, err)
+
+	toolExec := &mockToolExecutor{
+		results: []ToolResult{
+			{Content: `{"temp":72}`, LatencyMS: 10},
+		},
+	}
+
+	result, err := engine.ExecuteAgentLoop(context.Background(), prepared, toolExec, AgentLoopConfig{MaxTurns: 8})
+	require.NoError(t, err)
+	assert.Equal(t, "divergence", result.StopReason)
+	require.Len(t, result.Divergences, 1)
+	assert.Equal(t, "get_weather", result.Divergences[0].ToolName)
+	assert.Equal(t, "baseline_exhausted", result.Divergences[0].ErrorType)
+	// Only the first tool call should have been executed
+	assert.Equal(t, 1, toolExec.calls)
+}
+
+func TestAgentLoop_MultiToolTurn_DistinctCaptures(t *testing.T) {
+	// A single turn with 2 tool calls should persist both captures
+	// with distinct SpanIDs (no unique constraint collision).
+	store := newMockStorage()
+	store.replayTraces["baseline-trace-123"] = []*storage.ReplayTrace{
+		makeBaselineStep(0, storage.JSONB{
+			"messages": []any{
+				map[string]any{"role": "user", "content": "Do two things"},
+			},
+			"tools": []any{
+				map[string]any{
+					"type": "function",
+					"function": map[string]any{
+						"name": "tool_a",
+					},
+				},
+				map[string]any{
+					"type": "function",
+					"function": map[string]any{
+						"name": "tool_b",
+					},
+				},
+			},
+		}, 100),
+	}
+
+	completer := &mockCompleter{
+		responses: []*agwclient.CompletionResponse{
+			completionWithToolCalls("gpt-4o", "", []agwclient.ToolCallResponse{
+				toolCallResponse("call-1", "tool_a", `{"x":1}`),
+				toolCallResponse("call-2", "tool_b", `{"y":2}`),
+			}, 100),
+			completionNoTools("gpt-4o", "Done", 60),
+		},
+	}
+
+	engine := NewEngine(store, completer)
+	prepared, err := engine.Setup(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"}, 0.8)
+	require.NoError(t, err)
+
+	toolExec := &mockToolExecutor{
+		results: []ToolResult{
+			{Content: `{"a":"ok"}`, LatencyMS: 10},
+			{Content: `{"b":"ok"}`, LatencyMS: 10},
+		},
+	}
+
+	result, err := engine.ExecuteAgentLoop(context.Background(), prepared, toolExec, AgentLoopConfig{MaxTurns: 8})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.TurnsExecuted)
+	assert.Equal(t, 2, toolExec.calls)
+
+	// Verify both captures were stored with distinct SpanIDs
+	var captureSpanIDs []string
+	for _, cap := range store.createdCaptures {
+		captureSpanIDs = append(captureSpanIDs, cap.SpanID)
+	}
+	require.Len(t, captureSpanIDs, 2, "both tool captures should be persisted")
+	assert.NotEqual(t, captureSpanIDs[0], captureSpanIDs[1], "captures should have distinct SpanIDs")
+	// Both should reference the same turn
+	assert.Equal(t, 0, store.createdCaptures[0].StepIndex)
+	assert.Equal(t, 0, store.createdCaptures[1].StepIndex)
+}
+
+func TestCaptureQueue_Exhausted(t *testing.T) {
+	q := &captureQueue{
+		captures: []*storage.ToolCapture{
+			{ToolName: "foo", ArgsHash: "hash1"},
+			{ToolName: "foo", ArgsHash: "hash1"},
+			{ToolName: "bar", ArgsHash: "hash2"},
+		},
+		used: make([]bool, 3),
+	}
+
+	// Not exhausted before any matches
+	assert.False(t, q.exhausted("foo", "hash1"))
+
+	// Consume first
+	assert.NotNil(t, q.match("foo", "hash1"))
+	assert.False(t, q.exhausted("foo", "hash1")) // still one left
+
+	// Consume second
+	assert.NotNil(t, q.match("foo", "hash1"))
+	assert.True(t, q.exhausted("foo", "hash1")) // all consumed
+
+	// Different tool is not exhausted
+	assert.False(t, q.exhausted("bar", "hash2"))
+
+	// Tool that was never in queue
+	assert.False(t, q.exhausted("baz", "hash3"))
+
+	// Nil receiver
+	var nilQ *captureQueue
+	assert.False(t, nilQ.exhausted("foo", "hash1"))
+}
