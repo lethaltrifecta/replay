@@ -329,13 +329,7 @@ func (s *Server) CreateGateCheck(w http.ResponseWriter, r *http.Request) {
 
 		var toolExec replay.ToolExecutor
 		if s.mcpURL != "" {
-			freezeHeaders := storageRequestHeadersFromAPI(req.RequestHeaders)
-			if freezeHeaders == nil {
-				freezeHeaders = map[string]string{}
-			}
-			if _, ok := freezeHeaders[http.CanonicalHeaderKey("X-Freeze-Trace-ID")]; !ok {
-				freezeHeaders[http.CanonicalHeaderKey("X-Freeze-Trace-ID")] = req.BaselineTraceId
-			}
+			freezeHeaders := FreezeHeaders(storageRequestHeadersFromAPI(req.RequestHeaders), req.BaselineTraceId)
 			te, mcpErr := replay.NewMCPToolExecutor(s.ctx, s.mcpURL, freezeHeaders)
 			if mcpErr != nil {
 				s.log.Warnw("MCP connection failed, falling back to prompt-only replay",
@@ -442,6 +436,20 @@ var allowedRequestHeaders = map[string]bool{
 	http.CanonicalHeaderKey("X-Freeze-Trace-ID"):   true,
 	http.CanonicalHeaderKey("X-Freeze-Span-ID"):    true,
 	http.CanonicalHeaderKey("X-Freeze-Step-Index"): true,
+}
+
+// FreezeHeaders returns a copy of headers with X-Freeze-Trace-ID defaulted to
+// baselineTraceID when not already present. The returned map is always non-nil.
+func FreezeHeaders(headers map[string]string, baselineTraceID string) map[string]string {
+	out := make(map[string]string, len(headers)+1)
+	for k, v := range headers {
+		out[k] = v
+	}
+	key := http.CanonicalHeaderKey("X-Freeze-Trace-ID")
+	if _, ok := out[key]; !ok {
+		out[key] = baselineTraceID
+	}
+	return out
 }
 
 // SanitizeRequestHeaders canonicalizes keys and filters to the allowlist.

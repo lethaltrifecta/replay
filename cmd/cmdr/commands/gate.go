@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"strings"
 	"text/tabwriter"
@@ -138,13 +137,7 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 		}
 
 		// Extract freeze headers for MCP session
-		freezeHeaders := maps.Clone(requestHeaders)
-		if freezeHeaders == nil {
-			freezeHeaders = map[string]string{}
-		}
-		if _, ok := freezeHeaders[http.CanonicalHeaderKey("X-Freeze-Trace-ID")]; !ok {
-			freezeHeaders[http.CanonicalHeaderKey("X-Freeze-Trace-ID")] = baselineTraceID
-		}
+		freezeHeaders := api.FreezeHeaders(requestHeaders, baselineTraceID)
 
 		cmd.Printf("Connecting to freeze-mcp at %s...\n", cfg.MCPURL)
 		toolExec, mcpErr := replay.NewMCPToolExecutor(ctx, cfg.MCPURL, freezeHeaders)

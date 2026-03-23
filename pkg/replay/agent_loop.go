@@ -17,6 +17,13 @@ import (
 // DefaultMaxTurns is the default limit for agent loop iterations.
 const DefaultMaxTurns = 8
 
+// StopReason constants for AgentLoopResult.
+const (
+	StopReasonNoToolCalls = "no_tool_calls"
+	StopReasonDivergence  = "divergence"
+	StopReasonMaxTurns    = "max_turns"
+)
+
 // AgentLoopConfig holds configuration for the agent loop.
 type AgentLoopConfig struct {
 	MaxTurns int
@@ -75,12 +82,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 	step0 := prepared.BaselineSteps[0]
 	messages, err := extractMessages(step0.Prompt)
 	if err != nil {
-		cleanupErr := e.failExperiment(exp, variantRun, err)
-		result.Error = err
-		if cleanupErr != nil {
-			return result, fmt.Errorf("extract messages: %w (cleanup: %v)", err, cleanupErr)
-		}
-		return result, fmt.Errorf("extract messages: %w", err)
+		return agentLoopFail(e, result, exp, variantRun, "extract messages", err)
 	}
 
 	// Track current tools/tool_choice — refreshed from baseline steps as the loop progresses
@@ -101,12 +103,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 			}
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			cleanupErr := e.failExperiment(exp, variantRun, ctxErr)
-			result.Error = ctxErr
-			if cleanupErr != nil {
-				return result, fmt.Errorf("%w (cleanup: %v)", ctxErr, cleanupErr)
-			}
-			return result, ctxErr
+			return agentLoopFail(e, result, exp, variantRun, "context cancelled", ctxErr)
 		}
 
 		// Build and send LLM request
@@ -125,12 +122,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 		resp, err := e.client.Complete(ctx, req)
 		latencyMS := int(time.Since(start).Milliseconds())
 		if err != nil {
-			cleanupErr := e.failExperiment(exp, variantRun, err)
-			result.Error = err
-			if cleanupErr != nil {
-				return result, fmt.Errorf("llm call turn %d: %w (cleanup: %v)", turn, err, cleanupErr)
-			}
-			return result, fmt.Errorf("llm call turn %d: %w", turn, err)
+			return agentLoopFail(e, result, exp, variantRun, fmt.Sprintf("llm call turn %d", turn), err)
 		}
 
 		// Parse response
@@ -177,12 +169,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 		}
 
 		if err := e.store.CreateReplayTrace(ctx, variantTrace); err != nil {
-			cleanupErr := e.failExperiment(exp, variantRun, err)
-			result.Error = err
-			if cleanupErr != nil {
-				return result, fmt.Errorf("store turn %d: %w (cleanup: %v)", turn, err, cleanupErr)
-			}
-			return result, fmt.Errorf("store turn %d: %w", turn, err)
+			return agentLoopFail(e, result, exp, variantRun, fmt.Sprintf("store turn %d", turn), err)
 		}
 
 		result.Steps = append(result.Steps, variantTrace)
@@ -197,7 +184,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 
 		// If no tool calls, we're done
 		if len(assistantMsg.ToolCalls) == 0 {
-			result.StopReason = "no_tool_calls"
+			result.StopReason = StopReasonNoToolCalls
 			break
 		}
 
@@ -233,13 +220,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 			}
 
 			if toolErr != nil {
-				// Transport-level error — fail the experiment
-				cleanupErr := e.failExperiment(exp, variantRun, toolErr)
-				result.Error = toolErr
-				if cleanupErr != nil {
-					return result, fmt.Errorf("tool call %s turn %d: %w (cleanup: %v)", tc.Function.Name, turn, toolErr, cleanupErr)
-				}
-				return result, fmt.Errorf("tool call %s turn %d: %w", tc.Function.Name, turn, toolErr)
+				return agentLoopFail(e, result, exp, variantRun, fmt.Sprintf("tool call %s turn %d", tc.Function.Name, turn), toolErr)
 			}
 
 			// Store ToolCapture (non-fatal if it fails — audit data)
@@ -269,7 +250,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 					ErrorType: toolResult.ErrorType,
 					Message:   fmt.Sprintf("variant called %s which was not in the baseline capture", tc.Function.Name),
 				})
-				result.StopReason = "divergence"
+				result.StopReason = StopReasonDivergence
 				diverged = true
 				break
 			}
@@ -288,12 +269,12 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 
 		// If we've exhausted max turns
 		if turn == maxTurns-1 {
-			result.StopReason = "max_turns"
+			result.StopReason = StopReasonMaxTurns
 		}
 	}
 
 	if result.StopReason == "" {
-		result.StopReason = "max_turns"
+		result.StopReason = StopReasonMaxTurns
 	}
 
 	// Finalize: mark experiment completed (divergence is a valid result, not a failure)
@@ -302,6 +283,17 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 	}
 
 	return result, nil
+}
+
+// agentLoopFail marks the experiment as failed, records the error in the result,
+// and returns the result with a wrapped error (including cleanup status if that also failed).
+func agentLoopFail(e *Engine, result *AgentLoopResult, exp *storage.Experiment, run *storage.ExperimentRun, msg string, err error) (*AgentLoopResult, error) {
+	result.Error = err
+	cleanupErr := e.failExperiment(exp, run, err)
+	if cleanupErr != nil {
+		return result, fmt.Errorf("%s: %w (cleanup: %v)", msg, err, cleanupErr)
+	}
+	return result, fmt.Errorf("%s: %w", msg, err)
 }
 
 // buildPromptJSONB constructs a prompt JSONB matching the baseline format.
