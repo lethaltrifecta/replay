@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -64,7 +65,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 		},
 	}
 
-	// Extract initial messages/tools/tool_choice from baseline step 0
+	// Extract initial messages from baseline step 0
 	step0 := prepared.BaselineSteps[0]
 	messages, err := extractMessages(step0.Prompt)
 	if err != nil {
@@ -75,26 +76,24 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 		}
 		return result, fmt.Errorf("extract messages: %w", err)
 	}
-	tools, err := extractTools(step0.Prompt)
-	if err != nil {
-		cleanupErr := e.failExperiment(exp, variantRun, err)
-		result.Error = err
-		if cleanupErr != nil {
-			return result, fmt.Errorf("extract tools: %w (cleanup: %v)", err, cleanupErr)
-		}
-		return result, fmt.Errorf("extract tools: %w", err)
-	}
-	toolChoice, err := extractToolChoice(step0.Prompt)
-	if err != nil {
-		cleanupErr := e.failExperiment(exp, variantRun, err)
-		result.Error = err
-		if cleanupErr != nil {
-			return result, fmt.Errorf("extract tool choice: %w (cleanup: %v)", err, cleanupErr)
-		}
-		return result, fmt.Errorf("extract tool choice: %w", err)
-	}
+
+	// Track current tools/tool_choice — refreshed from baseline steps as the loop progresses
+	var tools []agwclient.ToolDefinition
+	var toolChoice any
 
 	for turn := 0; turn < maxTurns; turn++ {
+		// Refresh tools/tool_choice from the corresponding baseline step (if one exists).
+		// This mirrors per-step config changes (e.g. tool_choice going from "required" to "auto").
+		// When the variant runs beyond the baseline step count, the last config is retained.
+		if turn < len(prepared.BaselineSteps) {
+			stepPrompt := prepared.BaselineSteps[turn].Prompt
+			if t, err := extractTools(stepPrompt); err == nil {
+				tools = t
+			}
+			if tc, err := extractToolChoice(stepPrompt); err == nil {
+				toolChoice = tc
+			}
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			cleanupErr := e.failExperiment(exp, variantRun, ctxErr)
 			result.Error = ctxErr
@@ -200,7 +199,12 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 		diverged := false
 		for _, tc := range assistantMsg.ToolCalls {
 			var toolArgs map[string]any
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &toolArgs); err != nil {
+			// Use json.Number to preserve int64 precision for large values (>2^53).
+			// freeze-mcp hashes the exact numeric payload, so float64 rounding would
+			// produce a different args hash and miss the frozen capture.
+			dec := json.NewDecoder(bytes.NewReader([]byte(tc.Function.Arguments)))
+			dec.UseNumber()
+			if err := dec.Decode(&toolArgs); err != nil {
 				toolArgs = map[string]any{"_raw": tc.Function.Arguments}
 			}
 
@@ -224,7 +228,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 				ToolName:  tc.Function.Name,
 				Args:      argsJSONB,
 				ArgsHash:  otelreceiver.CalculateCaptureArgsHash(argsJSONB),
-				Result:    storage.JSONB{"content": toolResult.Content},
+				Result:    parseToolResultJSON(toolResult.Content),
 				LatencyMS: toolResult.LatencyMS,
 				RiskClass: otelreceiver.DetermineCaptureRiskClass(tc.Function.Name, argsJSONB),
 				CreatedAt: time.Now(),
@@ -290,4 +294,16 @@ func buildPromptJSONB(messages []agwclient.ChatMessage, tools []agwclient.ToolDe
 		prompt["tool_choice"] = toolChoice
 	}
 	return prompt
+}
+
+// parseToolResultJSON attempts to parse content as a JSON object and return it
+// directly as JSONB. This avoids double-encoding (wrapping JSON text in {"content": ...})
+// which would produce escaped payloads in tool_captures. Falls back to {"content": ...}
+// for non-JSON text content.
+func parseToolResultJSON(content string) storage.JSONB {
+	var parsed storage.JSONB
+	if err := json.Unmarshal([]byte(content), &parsed); err == nil && parsed != nil {
+		return parsed
+	}
+	return storage.JSONB{"content": content}
 }

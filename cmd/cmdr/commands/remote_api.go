@@ -99,7 +99,7 @@ func remoteExperimentReportError(resp *apiclient.GetExperimentReportResp) error 
 	}
 }
 
-func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, provider string, requestHeaders map[string]string, threshold float64) error {
+func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, provider string, requestHeaders map[string]string, threshold float64, maxTurns int) error {
 	ctx := commandContext(cmd)
 	client, err := newRemoteAPIClient(server)
 	if err != nil {
@@ -115,6 +115,9 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 	}
 	if provider != "" {
 		request.Provider = &provider
+	}
+	if maxTurns > 0 {
+		request.MaxTurns = &maxTurns
 	}
 	if headers := remoteReplayRequestHeaders(requestHeaders); headers != nil {
 		request.RequestHeaders = headers

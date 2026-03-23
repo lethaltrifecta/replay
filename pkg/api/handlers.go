@@ -344,6 +344,9 @@ func (s *Server) CreateGateCheck(w http.ResponseWriter, r *http.Request) {
 		}
 
 		loopCfg := replay.AgentLoopConfig{MaxTurns: s.agentLoopMaxTurns}
+		if req.MaxTurns != nil && *req.MaxTurns > 0 {
+			loopCfg.MaxTurns = *req.MaxTurns
+		}
 		RunGatePipeline(s.ctx, s.store, engine, prepared, threshold, s.log, toolExec, loopCfg)
 	}()
 }

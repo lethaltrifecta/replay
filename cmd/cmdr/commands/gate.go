@@ -81,7 +81,7 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	if server != "" {
-		return runGateCheckRemote(cmd, server, baselineTraceID, model, provider, requestHeaders, threshold)
+		return runGateCheckRemote(cmd, server, baselineTraceID, model, provider, requestHeaders, threshold, maxTurns)
 	}
 
 	return runGateCheckLocal(cmd, baselineTraceID, model, provider, requestHeaders, threshold, maxTurns)
