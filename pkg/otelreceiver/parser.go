@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 
 	"github.com/lethaltrifecta/replay/pkg/storage"
 	"github.com/lethaltrifecta/replay/pkg/utils/logger"
@@ -19,6 +20,11 @@ import (
 type Parser struct {
 	logger *logger.Logger
 }
+
+const (
+	genAIOperationExecuteTool = "execute_tool"
+	mcpMethodNameToolsCall    = "tools/call"
+)
 
 // NewParser creates a new parser
 func NewParser(log *logger.Logger) *Parser {
@@ -69,10 +75,17 @@ func (p *Parser) ParseOTELSpan(span ptrace.Span, resource pcommon.Resource) *sto
 func (p *Parser) IsLLMSpan(span ptrace.Span) bool {
 	attrs := span.Attributes()
 
+	if attr, ok := attrs.Get(string(semconv.GenAIOperationNameKey)); ok && attr.Str() == genAIOperationExecuteTool {
+		return false
+	}
+
 	// Check for gen_ai.* attributes
 	hasGenAI := false
 	attrs.Range(func(k string, v pcommon.Value) bool {
 		if strings.HasPrefix(k, "gen_ai.") {
+			if v.Type() == pcommon.ValueTypeStr && strings.TrimSpace(v.Str()) == "" {
+				return true
+			}
 			hasGenAI = true
 			return false // Stop iteration
 		}
@@ -232,111 +245,73 @@ func (p *Parser) extractParameters(attrs pcommon.Map) storage.JSONB {
 	return params
 }
 
-// ParseToolCalls extracts tool calls from span events or attributes
+// ParseToolCalls extracts tool captures from semconv-aligned execute_tool spans.
 func (p *Parser) ParseToolCalls(span ptrace.Span, traceID string, spanID string) []*storage.ToolCapture {
-	captures := []*storage.ToolCapture{}
+	if capture, ok := p.parseSemconvToolSpan(span, traceID, spanID); ok {
+		return []*storage.ToolCapture{capture}
+	}
+	return nil
+}
 
-	// Check for tool call events
-	events := span.Events()
-	stepIndex := 0
-
-	for i := 0; i < events.Len(); i++ {
-		event := events.At(i)
-
-		// Look for tool-related events (convention: event name starts with "tool")
-		if !strings.HasPrefix(event.Name(), "tool") {
-			continue
-		}
-
-		attrs := event.Attributes()
-
-		toolName := getStringAttr(attrs, "tool.name", "")
-		if toolName == "" {
-			// Try alternative attribute names
-			toolName = getStringAttr(attrs, "name", "")
-		}
-
-		if toolName == "" {
-			continue
-		}
-
-		// Extract args
-		var args storage.JSONB
-		if argsAttr, ok := attrs.Get("tool.args"); ok {
-			if argsAttr.Type() == pcommon.ValueTypeStr {
-				// Parse JSON string
-				var argsMap map[string]interface{}
-				if err := json.Unmarshal([]byte(argsAttr.Str()), &argsMap); err == nil {
-					args = storage.JSONB(argsMap)
-				}
-			} else if argsAttr.Type() == pcommon.ValueTypeMap {
-				args = attributesToJSON(argsAttr.Map())
-			}
-		}
-
-		if args == nil {
-			args = storage.JSONB{}
-		}
-
-		// Extract result
-		var result storage.JSONB
-		if resultAttr, ok := attrs.Get("tool.result"); ok {
-			if resultAttr.Type() == pcommon.ValueTypeStr {
-				// Parse JSON string
-				var resultMap map[string]interface{}
-				if err := json.Unmarshal([]byte(resultAttr.Str()), &resultMap); err == nil {
-					result = storage.JSONB(resultMap)
-				} else {
-					// Store as string if not valid JSON
-					result = storage.JSONB{"value": resultAttr.Str()}
-				}
-			} else if resultAttr.Type() == pcommon.ValueTypeMap {
-				result = attributesToJSON(resultAttr.Map())
-			}
-		}
-
-		if result == nil {
-			result = storage.JSONB{}
-		}
-
-		// Extract error
-		var errorStr *string
-		if errorAttr, ok := attrs.Get("tool.error"); ok {
-			err := errorAttr.Str()
-			errorStr = &err
-		}
-
-		// Calculate args hash for freeze mode lookup
-		argsHash := calculateArgsHash(args)
-
-		// Determine risk class
-		riskClass := determineRiskClass(toolName, args)
-
-		// Calculate latency (if available)
-		latencyMS := 0
-		if latencyAttr, ok := attrs.Get("tool.latency_ms"); ok {
-			latencyMS = int(latencyAttr.Int())
-		}
-
-		capture := &storage.ToolCapture{
-			TraceID:   traceID,
-			SpanID:    spanID,
-			StepIndex: stepIndex,
-			ToolName:  toolName,
-			Args:      args,
-			ArgsHash:  argsHash,
-			Result:    result,
-			Error:     errorStr,
-			LatencyMS: latencyMS,
-			RiskClass: riskClass,
-			CreatedAt: event.Timestamp().AsTime(),
-		}
-
-		captures = append(captures, capture)
-		stepIndex++
+func (p *Parser) parseSemconvToolSpan(span ptrace.Span, traceID string, spanID string) (*storage.ToolCapture, bool) {
+	attrs := span.Attributes()
+	if !isSemconvToolSpan(attrs) {
+		return nil, false
 	}
 
-	return captures
+	toolName := getStringAttrAny(attrs, []string{
+		string(semconv.GenAIToolNameKey),
+	}, "")
+	if toolName == "" {
+		return nil, false
+	}
+
+	args, hasArgs := extractOptionalJSONBAny(attrs,
+		string(semconv.GenAIToolCallArgumentsKey),
+	)
+	result, hasResult := extractOptionalJSONBAny(attrs,
+		string(semconv.GenAIToolCallResultKey),
+	)
+
+	var errorStr *string
+	if errorMsg := getStringAttrAny(attrs, []string{
+		string(semconv.ErrorMessageKey),
+		"mcp.tool.call.error",
+	}, ""); errorMsg != "" {
+		errorStr = &errorMsg
+	}
+	if !hasArgs && !hasResult && errorStr == nil {
+		return nil, false
+	}
+
+	latencyMS := int(span.EndTimestamp().AsTime().Sub(span.StartTimestamp().AsTime()).Milliseconds())
+
+	return &storage.ToolCapture{
+		TraceID:   traceID,
+		SpanID:    spanID,
+		StepIndex: 0,
+		ToolName:  toolName,
+		Args:      args,
+		ArgsHash:  calculateArgsHash(args),
+		Result:    result,
+		Error:     errorStr,
+		LatencyMS: latencyMS,
+		RiskClass: determineRiskClass(toolName, args),
+		CreatedAt: span.StartTimestamp().AsTime(),
+	}, true
+}
+
+func isSemconvToolSpan(attrs pcommon.Map) bool {
+	if attr, ok := attrs.Get(string(semconv.GenAIOperationNameKey)); ok && attr.Str() == genAIOperationExecuteTool {
+		return true
+	}
+	if attr, ok := attrs.Get(string(semconv.McpMethodNameKey)); ok && attr.Str() == mcpMethodNameToolsCall {
+		return true
+	}
+	if _, ok := attrs.Get(string(semconv.GenAIToolNameKey)); ok {
+		return true
+	}
+	return false
 }
 
 // Helper functions
@@ -428,6 +403,23 @@ func extractOptionalJSONAttr(attrs pcommon.Map, key string) (interface{}, bool) 
 	default:
 		return valueToInterface(attr), true
 	}
+}
+
+func extractOptionalJSONBAny(attrs pcommon.Map, keys ...string) (storage.JSONB, bool) {
+	for _, key := range keys {
+		if decoded, ok := extractOptionalJSONAttr(attrs, key); ok {
+			switch value := decoded.(type) {
+			case map[string]interface{}:
+				return storage.JSONB(value), true
+			case storage.JSONB:
+				return value, true
+			default:
+				return storage.JSONB{"value": value}, true
+			}
+		}
+	}
+
+	return storage.JSONB{}, false
 }
 
 func eventsToJSON(events ptrace.SpanEventSlice) storage.JSONB {

@@ -20,6 +20,7 @@ echo ""
 
 TRACE_ID="01020304050607080910111213141516"
 SPAN_ID="0102030405060708"
+SPAN_ID_TOOL="1112131415161718"
 TIMESTAMP_START="1234567890000000000"
 TIMESTAMP_END="1234567891000000000"
 
@@ -79,28 +80,33 @@ curl -X POST http://localhost:4318/v1/traces \
               \"value\": {\"intValue\": \"1024\"}
             }
           ],
-          \"events\": [
+          \"status\": {
+            \"code\": 1
+          }
+        },
+        {
+          \"traceId\": \"$TRACE_ID\",
+          \"spanId\": \"$SPAN_ID_TOOL\",
+          \"name\": \"execute_tool calculator\",
+          \"kind\": 1,
+          \"startTimeUnixNano\": \"$TIMESTAMP_START\",
+          \"endTimeUnixNano\": \"$TIMESTAMP_END\",
+          \"attributes\": [
             {
-              \"timeUnixNano\": \"$TIMESTAMP_START\",
-              \"name\": \"tool.call\",
-              \"attributes\": [
-                {
-                  \"key\": \"tool.name\",
-                  \"value\": {\"stringValue\": \"calculator\"}
-                },
-                {
-                  \"key\": \"tool.args\",
-                  \"value\": {\"stringValue\": \"{\\\"operation\\\": \\\"add\\\", \\\"a\\\": 2, \\\"b\\\": 2}\"}
-                },
-                {
-                  \"key\": \"tool.result\",
-                  \"value\": {\"stringValue\": \"{\\\"result\\\": 4}\"}
-                },
-                {
-                  \"key\": \"tool.latency_ms\",
-                  \"value\": {\"intValue\": \"5\"}
-                }
-              ]
+              \"key\": \"gen_ai.operation.name\",
+              \"value\": {\"stringValue\": \"execute_tool\"}
+            },
+            {
+              \"key\": \"gen_ai.tool.name\",
+              \"value\": {\"stringValue\": \"calculator\"}
+            },
+            {
+              \"key\": \"gen_ai.tool.call.arguments\",
+              \"value\": {\"stringValue\": \"{\\\"operation\\\": \\\"add\\\", \\\"a\\\": 2, \\\"b\\\": 2}\"}
+            },
+            {
+              \"key\": \"gen_ai.tool.call.result\",
+              \"value\": {\"stringValue\": \"{\\\"result\\\": 4}\"}
             }
           ],
           \"status\": {

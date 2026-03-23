@@ -7,7 +7,7 @@ This document describes the current primary full-loop demo path for the hackatho
 Show one realistic governance scenario with:
 
 1. a live baseline capture through `agentgateway`
-2. CMDR ingesting replay + tool data from the agent run
+2. CMDR ingesting replay + tool data from `agentgateway`
 3. a safe replay through `agentgateway -> freeze-mcp`
 4. an unsafe replay that gets blocked because the tool call was never approved in the baseline
 
@@ -20,11 +20,11 @@ The demo stack uses:
 - Docker PostgreSQL from this repo's `docker-compose.yml`
 - `cmdr serve` for OTLP ingestion
 - `freeze-mcp` for frozen tool replay
-- a mock MCP migration tool server for the live baseline
+- a Go mock MCP migration tool server for the live baseline
 - a mock OpenAI-compatible upstream for deterministic safe/unsafe tool choices
 - one `agentgateway` instance for baseline capture
 - one `agentgateway` instance for replay
-- a purpose-built demo agent in `scripts/run_migration_demo_agent.py`
+- a purpose-built Go demo agent flow behind `cmdr demo migration run`
 
 ## Scenario Contract
 
@@ -76,17 +76,19 @@ Run:
 
 ```bash
 source ~/.zshrc
-PYTHON_BIN=/tmp/freeze-venv/bin/python make test-migration-demo-full-loop
+FREEZE_DIR=../freeze-mcp \
+AGENTGATEWAY_DIR=../agentgateway \
+make test-migration-demo-full-loop
 ```
 
-If you use a different Python environment for `freeze-mcp`, set `PYTHON_BIN` accordingly.
+If you have multiple local checkouts of `freeze-mcp` or `agentgateway`, set `FREEZE_DIR` and `AGENTGATEWAY_DIR` explicitly.
 
 The harness:
 
 1. ensures Docker PostgreSQL is running
 2. starts CMDR if it is not already running
-3. starts `freeze-mcp` if it is not already running
-4. starts the mock migration MCP server
+3. runs `freeze-mcp` schema migration and starts the Go `freeze-mcp` server if it is not already running
+4. starts the Go mock migration MCP server
 5. starts the mock OpenAI-compatible upstream
 6. starts `agentgateway` for baseline capture
 7. runs the live baseline capture
@@ -96,6 +98,8 @@ The harness:
 11. asks CMDR itself for a safe replay verdict
 12. asks CMDR itself for an unsafe replay verdict
 13. prints the three trace IDs and log paths
+
+The harness verifies capture and replay through CMDR's own HTTP API. It no longer depends on host `psql` or raw row-count assertions for success.
 
 ## Expected Result
 
@@ -122,7 +126,7 @@ Verdict:    FAIL
 The script exits non-zero if:
 
 - CMDR or `freeze-mcp` never become ready
-- baseline capture does not write the expected `replay_traces` and `tool_captures`
+- baseline capture does not appear through CMDR's trace API with the expected steps and tool captures
 - safe replay diverges from the safe path
 - unsafe replay does not trigger a tool error
 
@@ -156,12 +160,12 @@ The unsafe verdict should highlight the first divergence as `inspect_schema` ver
 
 ## What Gets Written to CMDR
 
-The demo agent emits one OTLP span per LLM turn with:
+`agentgateway` emits one OTLP span per LLM turn plus semconv-aligned `execute_tool` spans for MCP `tools/call` requests with:
 
 - `gen_ai.prompt.*` request messages
 - `gen_ai.request.tools`
 - `gen_ai.completion.0.content`
-- `tool.call` events for each executed tool
+- separate `execute_tool` spans carrying `gen_ai.tool.*`
 
 That means CMDR stores:
 
@@ -170,11 +174,11 @@ That means CMDR stores:
 - baseline tool captures
 - replay tool captures, including the unsafe `drop_table` failure
 
-This is intentional. Today the demo agent emits the tool telemetry directly so CMDR gets deterministic `tool_captures` even before we add parser support for agentgateway MCP spans.
+This is now fully gateway-driven for the migration demo path. The demo agent drives the LLM + MCP loop, but the OTLP evidence used by CMDR comes from `agentgateway`.
 
-## Useful Queries
+## Optional DB Debugging
 
-After a successful run, inspect the traces:
+If you want to inspect the underlying tables after a successful run:
 
 ```bash
 psql 'postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable' \
@@ -184,9 +188,9 @@ psql 'postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable' \
 
 ## Key Files
 
-- `scripts/run_migration_demo_agent.py`
-- `scripts/mock_migration_mcp_server.py`
-- `scripts/mock_migration_openai_upstream.py`
+- `internal/migrationdemo/agent.go`
+- `cmd/mock-migration-mcp`
+- `cmd/mock-openai-upstream`
 - `scripts/agentgateway-migration-capture.yaml`
 - `scripts/agentgateway-migration-replay.yaml`
 - `scripts/test-migration-demo-full-loop.sh`

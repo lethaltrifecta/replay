@@ -14,7 +14,6 @@ import (
 
 func runMigrationDemo(cmd *cobra.Command, args []string) error {
 	reportDir, _ := cmd.Flags().GetString("report-dir")
-	pythonBin, _ := cmd.Flags().GetString("python-bin")
 	goBin, _ := cmd.Flags().GetString("go-bin")
 	agwDir, _ := cmd.Flags().GetString("agentgateway-dir")
 	freezeDir, _ := cmd.Flags().GetString("freeze-dir")
@@ -37,9 +36,6 @@ func runMigrationDemo(cmd *cobra.Command, args []string) error {
 
 	env := os.Environ()
 	env = setEnvValue(env, "REPORT_DIR", reportDir)
-	if pythonBin != "" {
-		env = setEnvValue(env, "PYTHON_BIN", pythonBin)
-	}
 	if goBin != "" {
 		env = setEnvValue(env, "GO_BIN", goBin)
 	}

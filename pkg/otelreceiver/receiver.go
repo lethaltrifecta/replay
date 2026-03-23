@@ -294,6 +294,7 @@ func (r *Receiver) processTraces(ctx context.Context, traces ptrace.Traces) erro
 			for k := 0; k < spans.Len(); k++ {
 				span := spans.At(k)
 				traceID := span.TraceID().String()
+				spanID := span.SpanID().String()
 				r.logger.Debug("Processing span", "index", k, "trace_id", traceID, "name", span.Name())
 
 				// Store raw OTEL trace
@@ -304,6 +305,19 @@ func (r *Receiver) processTraces(ctx context.Context, traces ptrace.Traces) erro
 				// Check if this is an LLM span (has gen_ai.* attributes)
 				isLLM := r.parser.IsLLMSpan(span)
 				r.logger.Debug("Checked if LLM span", "trace_id", traceID, "is_llm", isLLM)
+
+				parsedToolCaptures := r.parser.ParseToolCalls(span, traceID, spanID)
+				r.logger.Debug("Parsed tool calls", "trace_id", traceID, "count", len(parsedToolCaptures))
+
+				for idx, capture := range parsedToolCaptures {
+					toolCaptures = append(toolCaptures, capture)
+					r.logger.Debug("Stored tool capture",
+						"trace_id", capture.TraceID,
+						"tool_name", capture.ToolName,
+						"step_index", capture.StepIndex,
+						"index", idx,
+					)
+				}
 
 				if isLLM {
 					replayTrace := r.parser.ParseLLMSpan(span, rs.Resource())
@@ -318,20 +332,6 @@ func (r *Receiver) processTraces(ctx context.Context, traces ptrace.Traces) erro
 						"model", replayTrace.Model,
 						"tokens", replayTrace.TotalTokens,
 					)
-
-					// Parse and store tool calls
-					parsedToolCaptures := r.parser.ParseToolCalls(span, replayTrace.TraceID, replayTrace.SpanID)
-					r.logger.Debug("Parsed tool calls", "trace_id", traceID, "count", len(parsedToolCaptures))
-
-					for idx, capture := range parsedToolCaptures {
-						toolCaptures = append(toolCaptures, capture)
-						r.logger.Debug("Stored tool capture",
-							"trace_id", capture.TraceID,
-							"tool_name", capture.ToolName,
-							"step_index", capture.StepIndex,
-							"index", idx,
-						)
-					}
 				}
 			}
 		}
