@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 
 	"github.com/lethaltrifecta/replay/pkg/storage"
 	"github.com/lethaltrifecta/replay/pkg/utils/logger"
@@ -221,6 +222,24 @@ func TestParser_IsLLMSpan(t *testing.T) {
 
 		assert.False(t, parser.IsLLMSpan(span))
 	})
+
+	t.Run("execute_tool span is not treated as llm span", func(t *testing.T) {
+		span := ptrace.NewSpan()
+		span.Attributes().PutStr(string(semconv.GenAIOperationNameKey), "execute_tool")
+		span.Attributes().PutStr(string(semconv.GenAIToolNameKey), "check_backup")
+
+		assert.False(t, parser.IsLLMSpan(span))
+	})
+
+	t.Run("empty helper gen_ai attributes do not make non-llm spans look like llm", func(t *testing.T) {
+		span := ptrace.NewSpan()
+		span.Attributes().PutStr(string(semconv.GenAIOperationNameKey), "")
+		span.Attributes().PutStr(string(semconv.GenAIToolCallArgumentsKey), "")
+		span.Attributes().PutStr(string(semconv.GenAIToolCallResultKey), "")
+		span.Attributes().PutStr(string(semconv.McpMethodNameKey), "tools/list")
+
+		assert.False(t, parser.IsLLMSpan(span))
+	})
 }
 
 func TestParser_ParseLLMSpan(t *testing.T) {
@@ -350,6 +369,70 @@ func TestParser_ParseLLMSpan_PreservesReplayToolMetadata(t *testing.T) {
 	toolChoice, ok := trace.Prompt["tool_choice"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "function", toolChoice["type"])
+}
+
+func TestReceiver_StoresSemconvToolSpan(t *testing.T) {
+	log, _ := logger.New("debug")
+	mock := &mockStorage{}
+
+	receiver, err := NewReceiver(Config{}, mock, log)
+	require.NoError(t, err)
+
+	traces := ptrace.NewTraces()
+	rs := traces.ResourceSpans().AppendEmpty()
+	rs.Resource().Attributes().PutStr("service.name", "tool-agent")
+	span := rs.ScopeSpans().AppendEmpty().Spans().AppendEmpty()
+	span.SetTraceID(pcommon.TraceID([16]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}))
+	span.SetSpanID(pcommon.SpanID([8]byte{2, 2, 2, 2, 2, 2, 2, 2}))
+	now := time.Now()
+	span.SetStartTimestamp(pcommon.NewTimestampFromTime(now))
+	span.SetEndTimestamp(pcommon.NewTimestampFromTime(now.Add(100 * time.Millisecond)))
+	span.SetName("execute_tool check_backup")
+	span.Attributes().PutStr(string(semconv.GenAIOperationNameKey), "execute_tool")
+	span.Attributes().PutStr(string(semconv.GenAIToolNameKey), "check_backup")
+	span.Attributes().PutStr(string(semconv.GenAIToolCallArgumentsKey), `{"cluster":"prod"}`)
+	span.Attributes().PutStr(string(semconv.GenAIToolCallResultKey), `{"ok":true}`)
+	span.Attributes().PutStr(string(semconv.McpMethodNameKey), "tools/call")
+
+	_, err = receiver.Export(context.Background(), ptraceotlp.NewExportRequestFromTraces(traces))
+	require.NoError(t, err)
+
+	require.Len(t, mock.toolCaptures, 1)
+	assert.Empty(t, mock.replayTraces)
+	assert.Equal(t, "check_backup", mock.toolCaptures[0].ToolName)
+	assert.Equal(t, "01010101010101010101010101010101", mock.toolCaptures[0].TraceID)
+	assert.Equal(t, "0202020202020202", mock.toolCaptures[0].SpanID)
+}
+
+func TestReceiver_IgnoresLegacyToolEventShape(t *testing.T) {
+	log, _ := logger.New("debug")
+	mock := &mockStorage{}
+
+	receiver, err := NewReceiver(Config{}, mock, log)
+	require.NoError(t, err)
+
+	traces := ptrace.NewTraces()
+	rs := traces.ResourceSpans().AppendEmpty()
+	rs.Resource().Attributes().PutStr("service.name", "tool-agent")
+	span := rs.ScopeSpans().AppendEmpty().Spans().AppendEmpty()
+	span.SetTraceID(pcommon.TraceID([16]byte{3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3}))
+	span.SetSpanID(pcommon.SpanID([8]byte{4, 4, 4, 4, 4, 4, 4, 4}))
+	now := time.Now()
+	span.SetStartTimestamp(pcommon.NewTimestampFromTime(now))
+	span.SetEndTimestamp(pcommon.NewTimestampFromTime(now.Add(100 * time.Millisecond)))
+	span.SetName("agent.tool.calls")
+
+	event := span.Events().AppendEmpty()
+	event.SetName("tool.call")
+	event.SetTimestamp(pcommon.NewTimestampFromTime(now.Add(10 * time.Millisecond)))
+	event.Attributes().PutStr("tool.name", "check_backup")
+	event.Attributes().PutStr("tool.args", `{"cluster":"prod"}`)
+	event.Attributes().PutStr("tool.result", `{"ok":true}`)
+
+	_, err = receiver.Export(context.Background(), ptraceotlp.NewExportRequestFromTraces(traces))
+	require.NoError(t, err)
+
+	assert.Empty(t, mock.toolCaptures)
 }
 
 func TestReceiver_New(t *testing.T) {

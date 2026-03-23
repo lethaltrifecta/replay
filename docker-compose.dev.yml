@@ -84,25 +84,27 @@ services:
   # --- Mock LLM (OpenAI-compatible) ---
 
   mock-llm:
-    image: python:3.12-slim
+    image: golang:1.24
     container_name: cmdr-dev-mock-llm
     working_dir: /app
     volumes:
-      - ./scripts/mock_openai_upstream.py:/app/mock_openai_upstream.py:ro
-    command: >
-      python mock_openai_upstream.py
-        --host 0.0.0.0
-        --port 18080
-        --model mock-model
-        --response-text "Mock response from dev stack."
+      - .:/app:ro
+    command:
+      - go
+      - run
+      - ./cmd/mock-openai-upstream
+      - --mode
+      - basic
+      - --host
+      - 0.0.0.0
+      - --port
+      - "18080"
+      - --model
+      - mock-model
+      - --response-text
+      - Mock response from dev stack.
     ports:
       - "18080:18080"
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:18080/v1/chat/completions', data=b'{\"model\":\"x\",\"messages\":[]}')\" 2>/dev/null || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 2s
 
   # --- agentgateway (LLM + MCP proxy) ---
 
@@ -111,7 +113,7 @@ services:
     container_name: cmdr-dev-agentgateway
     depends_on:
       mock-llm:
-        condition: service_healthy
+        condition: service_started
     volumes:
       - ./scripts/agentgateway-dev-stack.yaml:/etc/agentgateway/config.yaml:ro
     command: ["-f", "/etc/agentgateway/config.yaml"]
@@ -132,12 +134,6 @@ services:
       FREEZE_PORT: "9090"
     ports:
       - "9090:9090"
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import http.client; c=http.client.HTTPConnection('localhost',9090); c.request('GET','/health'); exit(0 if c.getresponse().status==200 else 1)\""]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 5s
 
 volumes:
   dev_postgres_data:

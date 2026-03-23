@@ -73,8 +73,7 @@ func init() {
 	demoMigrationCmd.AddCommand(demoMigrationVerdictCmd)
 
 	demoMigrationRunCmd.Flags().String("report-dir", "", "Directory to store run logs and report artifacts (default: ./artifacts/migration-demo/<timestamp>)")
-	demoMigrationRunCmd.Flags().String("python-bin", "", "Python interpreter to use for freeze-mcp and demo helper scripts")
-	demoMigrationRunCmd.Flags().String("go-bin", "", "Go binary to use when the harness needs to fall back to go run")
+	demoMigrationRunCmd.Flags().String("go-bin", "", "Go binary to use for cmdr and the demo helper processes")
 	demoMigrationRunCmd.Flags().String("agentgateway-dir", "", "Path to the local agentgateway checkout (defaults to ../agentgateway)")
 	demoMigrationRunCmd.Flags().String("freeze-dir", "", "Path to the local freeze-mcp checkout (defaults to ../freeze-mcp)")
 	demoMigrationRunCmd.Flags().Float64("threshold", 0.8, "Similarity threshold used for the saved PASS/FAIL report")

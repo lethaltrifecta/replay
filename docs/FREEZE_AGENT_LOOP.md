@@ -34,9 +34,9 @@ Those are the next steps after this proof.
 ## Repo Artifacts
 
 - `scripts/agentgateway-freeze-loop.yaml`
-- `scripts/capture_freeze_baseline.py`
-- `scripts/mock_toolcall_openai_upstream.py`
-- `scripts/run_freeze_agent_loop.py`
+- `internal/freezeloop/capture.go`
+- `cmd/mock-openai-upstream`
+- `internal/freezeloop/loop.go`
 - `scripts/test-agent-loop-freeze.sh`
 
 ## Running It
@@ -47,11 +47,10 @@ Prerequisites:
 - `cmdr serve` running at `http://127.0.0.1:4318` for the default baseline capture path
 - `freeze-mcp` running at `http://127.0.0.1:9090`
 - local `agentgateway` clone available at `../agentgateway`
-- Python environment with `freeze_mcp`, `mcp`, `httpx`, `anyio`, and `psycopg`
+- Go toolchain available in `PATH`
 
-If the target database is empty, the script applies CMDR's checked-in SQL migrations before seeding the tool capture.
 The default PostgreSQL URL matches this repo's Docker Compose stack: `postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable`.
-The default baseline source is `cmdr`; set `BASELINE_SOURCE=seed` if you want the older direct-SQL fallback.
+The default baseline source is `cmdr`; set `BASELINE_SOURCE=seed` if you want the storage-backed fallback that inserts the tool capture without using OTLP ingestion.
 The default MCP transport is `agentgateway`; set `MCP_TRANSPORT_MODE=direct` if you want the older direct-to-`freeze-mcp` fallback.
 
 Run:

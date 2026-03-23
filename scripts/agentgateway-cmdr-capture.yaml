@@ -1,13 +1,14 @@
 # yaml-language-server: $schema=https://agentgateway.dev/schema/config
 config:
   tracing:
-    otlpEndpoint: http://localhost:4317
+    otlpEndpoint: http://127.0.0.1:4317
+    otlpProtocol: grpc
     randomSampling: true
     fields:
       add:
         gen_ai.system: 'llm.provider'
-        gen_ai.prompt: 'flattenRecursive(llm.prompt)'
-        gen_ai.completion: 'flattenRecursive(llm.completion.map(c, {"role":"assistant", "content": c}))'
+        gen_ai.prompt: 'flatten_recursive(llm.prompt)'
+        gen_ai.completion: 'flatten_recursive(llm.completion.map(c, {"role":"assistant", "content": c}))'
 
 binds:
 - port: 3001

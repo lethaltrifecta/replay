@@ -1,4 +1,14 @@
 # yaml-language-server: $schema=https://agentgateway.dev/schema/config
+frontendPolicies:
+  tracing:
+    host: localhost:4317
+    randomSampling: true
+    attributes:
+      gen_ai.system: 'llm.provider'
+      gen_ai.prompt: 'flatten_recursive(llm.prompt)'
+      gen_ai.completion: 'flatten_recursive(llm.completion.map(c, {"role":"assistant", "content": c}))'
+      gen_ai.operation.name: 'mcp.tool.name != null ? "execute_tool" : null'
+
 binds:
 - port: 3102
   listeners:
@@ -38,4 +48,4 @@ binds:
           targets:
           - name: migration-tools
             mcp:
-              host: http://127.0.0.1:18082/mcp/
+              host: http://127.0.0.1:18082/mcp
