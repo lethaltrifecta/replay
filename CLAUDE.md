@@ -189,7 +189,7 @@ Two core features:
 
 ## Tech Stack
 
-- **Language:** Go 1.24
+- **Language:** Go 1.26
 - **Database:** PostgreSQL 15
 - **CLI:** spf13/cobra
 - **Config:** kelseyhightower/envconfig (env vars prefixed `CMDR_`)

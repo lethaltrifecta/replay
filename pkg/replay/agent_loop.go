@@ -85,15 +85,22 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 		return agentLoopFail(e, result, exp, variantRun, "extract messages", err)
 	}
 
-	// Track current tools/tool_choice — refreshed from baseline steps as the loop progresses
-	var tools []agwclient.ToolDefinition
-	var toolChoice any
+	// Extract tools/tool_choice from step 0 — fail if the baseline prompt is malformed.
+	tools, err := extractTools(step0.Prompt)
+	if err != nil {
+		return agentLoopFail(e, result, exp, variantRun, "extract tools from step 0", err)
+	}
+	toolChoice, err := extractToolChoice(step0.Prompt)
+	if err != nil {
+		return agentLoopFail(e, result, exp, variantRun, "extract tool_choice from step 0", err)
+	}
 
 	for turn := 0; turn < maxTurns; turn++ {
-		// Refresh tools/tool_choice from the corresponding baseline step (if one exists).
+		// Refresh tools/tool_choice from subsequent baseline steps (if one exists).
 		// This mirrors per-step config changes (e.g. tool_choice going from "required" to "auto").
 		// When the variant runs beyond the baseline step count, the last config is retained.
-		if turn < len(prepared.BaselineSteps) {
+		// Errors on later steps are non-fatal — we keep the last known config.
+		if turn > 0 && turn < len(prepared.BaselineSteps) {
 			stepPrompt := prepared.BaselineSteps[turn].Prompt
 			if t, err := extractTools(stepPrompt); err == nil {
 				tools = t
@@ -271,10 +278,6 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 		if turn == maxTurns-1 {
 			result.StopReason = StopReasonMaxTurns
 		}
-	}
-
-	if result.StopReason == "" {
-		result.StopReason = StopReasonMaxTurns
 	}
 
 	// Finalize: mark experiment completed (divergence is a valid result, not a failure)
