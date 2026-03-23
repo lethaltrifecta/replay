@@ -86,7 +86,7 @@ services:
   # --- Mock LLM (OpenAI-compatible) ---
 
   mock-llm:
-    image: golang:1.24
+    image: golang:1.26
     container_name: cmdr-dev-mock-llm
     working_dir: /app
     volumes:
