@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/lethaltrifecta/replay/pkg/agwclient"
+	"github.com/lethaltrifecta/replay/pkg/otelreceiver"
 	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
@@ -303,7 +305,7 @@ func TestAgentLoop_MaxTurnsExhaustion(t *testing.T) {
 	responses := make([]*agwclient.CompletionResponse, 3)
 	for i := range responses {
 		responses[i] = completionWithToolCalls("gpt-4o", "", []agwclient.ToolCallResponse{
-			toolCallResponse("call-"+string(rune('1'+i)), "loop_tool", `{}`),
+			toolCallResponse(fmt.Sprintf("call-%d", i+1), "loop_tool", `{}`),
 		}, 80)
 	}
 
@@ -479,4 +481,111 @@ func TestAgentLoop_MetadataFormat(t *testing.T) {
 	default:
 		t.Fatalf("unexpected turn type: %T", turnVal)
 	}
+}
+
+// --- locatorMockToolExecutor ---
+
+// locatorCall records a single SetLocator invocation.
+type locatorCall struct {
+	SpanID    string
+	StepIndex int
+}
+
+// locatorMockToolExecutor is a mockToolExecutor that also implements ToolLocator.
+type locatorMockToolExecutor struct {
+	mockToolExecutor
+	setLocatorCalls   []locatorCall
+	clearLocatorCalls int
+}
+
+func (m *locatorMockToolExecutor) SetLocator(spanID string, stepIndex int) {
+	m.setLocatorCalls = append(m.setLocatorCalls, locatorCall{SpanID: spanID, StepIndex: stepIndex})
+}
+
+func (m *locatorMockToolExecutor) ClearLocator() {
+	m.clearLocatorCalls++
+}
+
+func TestAgentLoop_LocatorMatchesBaselineCaptures(t *testing.T) {
+	// Baseline calls get_weather twice with the same args but different results.
+	// The agent loop should set the correct locator (span_id, step_index) for each.
+	argsJSON := storage.JSONB{"city": "SF"}
+	argsHash := otelreceiver.CalculateCaptureArgsHash(argsJSON)
+
+	store := newMockStorage()
+	store.replayTraces["baseline-trace-123"] = []*storage.ReplayTrace{
+		makeBaselineStep(0, storage.JSONB{
+			"messages": []any{
+				map[string]any{"role": "user", "content": "Check weather twice"},
+			},
+			"tools": []any{
+				map[string]any{
+					"type": "function",
+					"function": map[string]any{
+						"name": "get_weather",
+					},
+				},
+			},
+		}, 100),
+	}
+
+	// Seed two baseline captures for the same tool+args
+	store.toolCaptures = map[string][]*storage.ToolCapture{
+		"baseline-trace-123": {
+			{
+				TraceID:   "baseline-trace-123",
+				SpanID:    "span-aaa",
+				StepIndex: 0,
+				ToolName:  "get_weather",
+				ArgsHash:  argsHash,
+				Result:    storage.JSONB{"temp": 72},
+			},
+			{
+				TraceID:   "baseline-trace-123",
+				SpanID:    "span-bbb",
+				StepIndex: 1,
+				ToolName:  "get_weather",
+				ArgsHash:  argsHash,
+				Result:    storage.JSONB{"temp": 68},
+			},
+		},
+	}
+
+	completer := &mockCompleter{
+		responses: []*agwclient.CompletionResponse{
+			// Turn 0: calls get_weather twice
+			completionWithToolCalls("gpt-4o", "", []agwclient.ToolCallResponse{
+				toolCallResponse("call-1", "get_weather", `{"city":"SF"}`),
+				toolCallResponse("call-2", "get_weather", `{"city":"SF"}`),
+			}, 100),
+			// Turn 1: final answer
+			completionNoTools("gpt-4o", "Weather checked!", 60),
+		},
+	}
+
+	engine := NewEngine(store, completer)
+	prepared, err := engine.Setup(context.Background(), "baseline-trace-123", VariantConfig{Model: "gpt-4o"}, 0.8)
+	require.NoError(t, err)
+
+	toolExec := &locatorMockToolExecutor{
+		mockToolExecutor: mockToolExecutor{
+			results: []ToolResult{
+				{Content: `{"temp":72}`, LatencyMS: 10},
+				{Content: `{"temp":68}`, LatencyMS: 10},
+			},
+		},
+	}
+
+	result, err := engine.ExecuteAgentLoop(context.Background(), prepared, toolExec, AgentLoopConfig{MaxTurns: 8})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.TurnsExecuted)
+	assert.Equal(t, "no_tool_calls", result.StopReason)
+
+	// Verify SetLocator was called twice with the correct span/step
+	require.Len(t, toolExec.setLocatorCalls, 2)
+	assert.Equal(t, locatorCall{SpanID: "span-aaa", StepIndex: 0}, toolExec.setLocatorCalls[0])
+	assert.Equal(t, locatorCall{SpanID: "span-bbb", StepIndex: 1}, toolExec.setLocatorCalls[1])
+
+	// Verify ClearLocator was called after each tool call
+	assert.Equal(t, 2, toolExec.clearLocatorCalls)
 }

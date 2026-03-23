@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -13,6 +15,15 @@ import (
 type ToolExecutor interface {
 	CallTool(ctx context.Context, toolName string, args map[string]any) (ToolResult, error)
 	Close() error
+}
+
+// ToolLocator is an optional interface that ToolExecutor implementations can
+// satisfy to support per-call capture locator headers (X-Freeze-Span-Id,
+// X-Freeze-Step-Index). The agent loop sets these before each CallTool and
+// clears them after.
+type ToolLocator interface {
+	SetLocator(spanID string, stepIndex int)
+	ClearLocator()
 }
 
 // ToolResult holds the outcome of a single tool call.
@@ -26,17 +37,20 @@ type ToolResult struct {
 // MCPToolExecutor implements ToolExecutor via an MCP client session.
 type MCPToolExecutor struct {
 	session *mcp.ClientSession
+	rt      *freezeRoundTripper
 }
 
 // NewMCPToolExecutor creates an MCP-backed ToolExecutor.
 // headers should carry freeze-scoping headers like X-Freeze-Trace-ID.
 func NewMCPToolExecutor(ctx context.Context, mcpURL string, headers map[string]string) (*MCPToolExecutor, error) {
+	rt := &freezeRoundTripper{
+		base:    http.DefaultTransport,
+		headers: headers,
+	}
+
 	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &staticHeadersRoundTripper{
-			base:    http.DefaultTransport,
-			headers: headers,
-		},
+		Timeout:   30 * time.Second,
+		Transport: rt,
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{
@@ -53,7 +67,7 @@ func NewMCPToolExecutor(ctx context.Context, mcpURL string, headers map[string]s
 		return nil, fmt.Errorf("mcp connect: %w", err)
 	}
 
-	return &MCPToolExecutor{session: session}, nil
+	return &MCPToolExecutor{session: session, rt: rt}, nil
 }
 
 // CallTool invokes a tool via the MCP session and returns the result.
@@ -92,6 +106,19 @@ func (m *MCPToolExecutor) CallTool(ctx context.Context, toolName string, args ma
 	return result, nil
 }
 
+// SetLocator sets per-call locator headers for the next MCP request.
+func (m *MCPToolExecutor) SetLocator(spanID string, stepIndex int) {
+	m.rt.setOverrides(map[string]string{
+		http.CanonicalHeaderKey("X-Freeze-Span-Id"):    spanID,
+		http.CanonicalHeaderKey("X-Freeze-Step-Index"): strconv.Itoa(stepIndex),
+	})
+}
+
+// ClearLocator removes per-call locator headers.
+func (m *MCPToolExecutor) ClearLocator() {
+	m.rt.clearOverrides()
+}
+
 // Close terminates the MCP session.
 func (m *MCPToolExecutor) Close() error {
 	if m.session != nil {
@@ -115,17 +142,39 @@ func extractFreezeErrorType(structured any) string {
 	return errType
 }
 
-// staticHeadersRoundTripper injects static headers into every outbound request.
-type staticHeadersRoundTripper struct {
+// freezeRoundTripper injects static headers and optional mutable per-call
+// overrides into every outbound request. The agent loop is sequential so
+// there is no concurrent-write concern, but we protect overrides with a
+// mutex for correctness.
+type freezeRoundTripper struct {
 	base    http.RoundTripper
-	headers map[string]string
+	headers map[string]string // immutable base headers
+
+	mu        sync.Mutex
+	overrides map[string]string // mutable per-call locator headers
 }
 
-func (rt *staticHeadersRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+func (rt *freezeRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
-	clone.Header = req.Header.Clone()
 	for key, value := range rt.headers {
 		clone.Header.Set(key, value)
 	}
+	rt.mu.Lock()
+	for key, value := range rt.overrides {
+		clone.Header.Set(key, value)
+	}
+	rt.mu.Unlock()
 	return rt.base.RoundTrip(clone)
+}
+
+func (rt *freezeRoundTripper) setOverrides(m map[string]string) {
+	rt.mu.Lock()
+	rt.overrides = m
+	rt.mu.Unlock()
+}
+
+func (rt *freezeRoundTripper) clearOverrides() {
+	rt.mu.Lock()
+	rt.overrides = nil
+	rt.mu.Unlock()
 }

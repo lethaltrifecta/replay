@@ -51,6 +51,12 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 		maxTurns = DefaultMaxTurns
 	}
 
+	// Pre-load baseline captures for per-call locator matching (non-fatal on failure).
+	var captureQ *captureQueue
+	if caps, err := e.store.GetToolCapturesByTrace(ctx, prepared.Experiment.BaselineTraceID); err == nil && len(caps) > 0 {
+		captureQ = &captureQueue{captures: caps, used: make([]bool, len(caps))}
+	}
+
 	variantTraceID := uuid.New().String()
 	exp := prepared.Experiment
 	variantRun := prepared.VariantRun
@@ -208,7 +214,24 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 				toolArgs = map[string]any{"_raw": tc.Function.Arguments}
 			}
 
+			// Compute args hash before CallTool for locator matching and capture reuse.
+			argsJSONB := storage.JSONB(toolArgs)
+			argsHash := otelreceiver.CalculateCaptureArgsHash(argsJSONB)
+
+			// Set per-call locator if we have a matching baseline capture.
+			if matched := captureQ.match(tc.Function.Name, argsHash); matched != nil {
+				if locator, ok := toolExec.(ToolLocator); ok {
+					locator.SetLocator(matched.SpanID, matched.StepIndex)
+				}
+			}
+
 			toolResult, toolErr := toolExec.CallTool(ctx, tc.Function.Name, toolArgs)
+
+			// Clear locator regardless of outcome.
+			if locator, ok := toolExec.(ToolLocator); ok {
+				locator.ClearLocator()
+			}
+
 			if toolErr != nil {
 				// Transport-level error — fail the experiment
 				cleanupErr := e.failExperiment(exp, variantRun, toolErr)
@@ -220,14 +243,13 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 			}
 
 			// Store ToolCapture (non-fatal if it fails — audit data)
-			argsJSONB := storage.JSONB(toolArgs)
 			capture := &storage.ToolCapture{
 				TraceID:   variantTraceID,
 				SpanID:    variantTrace.SpanID,
 				StepIndex: turn,
 				ToolName:  tc.Function.Name,
 				Args:      argsJSONB,
-				ArgsHash:  otelreceiver.CalculateCaptureArgsHash(argsJSONB),
+				ArgsHash:  argsHash,
 				Result:    parseToolResultJSON(toolResult.Content),
 				LatencyMS: toolResult.LatencyMS,
 				RiskClass: otelreceiver.DetermineCaptureRiskClass(tc.Function.Name, argsJSONB),
@@ -306,4 +328,26 @@ func parseToolResultJSON(content string) storage.JSONB {
 		return parsed
 	}
 	return storage.JSONB{"content": content}
+}
+
+// captureQueue tracks baseline captures and matches them to variant tool calls
+// by (tool_name, args_hash), scanning forward for the first unused match.
+type captureQueue struct {
+	captures []*storage.ToolCapture
+	used     []bool
+}
+
+// match finds the first unused capture with matching tool_name and args_hash.
+// Returns nil on nil receiver or no match.
+func (q *captureQueue) match(toolName, argsHash string) *storage.ToolCapture {
+	if q == nil {
+		return nil
+	}
+	for i, cap := range q.captures {
+		if !q.used[i] && cap.ToolName == toolName && cap.ArgsHash == argsHash {
+			q.used[i] = true
+			return cap
+		}
+	}
+	return nil
 }

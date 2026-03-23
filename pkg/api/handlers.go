@@ -330,6 +330,12 @@ func (s *Server) CreateGateCheck(w http.ResponseWriter, r *http.Request) {
 		var toolExec replay.ToolExecutor
 		if s.mcpURL != "" {
 			freezeHeaders := storageRequestHeadersFromAPI(req.RequestHeaders)
+			if freezeHeaders == nil {
+				freezeHeaders = map[string]string{}
+			}
+			if _, ok := freezeHeaders[http.CanonicalHeaderKey("X-Freeze-Trace-ID")]; !ok {
+				freezeHeaders[http.CanonicalHeaderKey("X-Freeze-Trace-ID")] = req.BaselineTraceId
+			}
 			te, mcpErr := replay.NewMCPToolExecutor(s.ctx, s.mcpURL, freezeHeaders)
 			if mcpErr != nil {
 				s.log.Warnw("MCP connection failed, falling back to prompt-only replay",
