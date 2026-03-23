@@ -13,16 +13,39 @@ import (
 // RunGatePipeline executes the replay loop, diffs results, and persists the analysis.
 // It is designed to run in a background goroutine after Setup has returned an experiment ID.
 // On failure it marks the experiment as failed via the engine's internal cleanup.
+// If toolExec is non-nil, uses agent loop mode; otherwise falls back to prompt-only replay.
 func RunGatePipeline(ctx context.Context, store storage.Storage, engine *replay.Engine,
-	prepared *replay.PreparedRun, threshold float64, log *logger.Logger) {
+	prepared *replay.PreparedRun, threshold float64, log *logger.Logger,
+	toolExec replay.ToolExecutor, loopCfg replay.AgentLoopConfig) {
 
-	result, err := engine.Execute(ctx, prepared)
-	if err != nil {
-		log.Errorw("replay execution failed",
+	var result *replay.Result
+
+	if toolExec != nil {
+		loopResult, err := engine.ExecuteAgentLoop(ctx, prepared, toolExec, loopCfg)
+		if err != nil {
+			log.Errorw("agent loop execution failed",
+				"experiment_id", prepared.ExperimentID,
+				"error", err,
+			)
+			return // ExecuteAgentLoop already marks experiment failed
+		}
+		result = &loopResult.Result
+		log.Infow("agent loop completed",
 			"experiment_id", prepared.ExperimentID,
-			"error", err,
+			"turns", loopResult.TurnsExecuted,
+			"stop_reason", loopResult.StopReason,
+			"divergences", len(loopResult.Divergences),
 		)
-		return // Execute already marks experiment failed
+	} else {
+		promptResult, err := engine.Execute(ctx, prepared)
+		if err != nil {
+			log.Errorw("replay execution failed",
+				"experiment_id", prepared.ExperimentID,
+				"error", err,
+			)
+			return // Execute already marks experiment failed
+		}
+		result = promptResult
 	}
 
 	// Reload traces for diff comparison

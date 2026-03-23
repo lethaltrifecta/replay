@@ -27,7 +27,7 @@ func TestRunGatePipeline_AnalysisPersistFailureMarksVariantRunFailed(t *testing.
 
 	store.createAnalysisErr = errors.New("analysis write failed")
 
-	RunGatePipeline(context.Background(), store, engine, prepared, 0.8, srv.log)
+	RunGatePipeline(context.Background(), store, engine, prepared, 0.8, srv.log, nil, replay.AgentLoopConfig{})
 
 	exp, err := store.GetExperiment(context.Background(), prepared.ExperimentID)
 	require.NoError(t, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"text/tabwriter"
@@ -52,6 +53,7 @@ func init() {
 	gateCheckCmd.Flags().StringArray("request-header", nil, "Additional replay request header in KEY=VALUE form (repeatable)")
 	gateCheckCmd.Flags().Float64("threshold", 0.8, "Similarity threshold for pass verdict")
 	gateCheckCmd.Flags().String("server", "", "CMDR server URL for remote execution (e.g. http://localhost:8080)")
+	gateCheckCmd.Flags().Int("max-turns", 0, "Maximum agent loop turns (overrides CMDR_AGENT_LOOP_MAX_TURNS)")
 	_ = gateCheckCmd.MarkFlagRequired("baseline")
 	_ = gateCheckCmd.MarkFlagRequired("model")
 
@@ -67,6 +69,7 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 	requestHeaderSpecs, _ := cmd.Flags().GetStringArray("request-header")
 	threshold, _ := cmd.Flags().GetFloat64("threshold")
 	server, _ := cmd.Flags().GetString("server")
+	maxTurns, _ := cmd.Flags().GetInt("max-turns")
 
 	if threshold < 0 || threshold > 1 {
 		return fmt.Errorf("--threshold must be between 0.0 and 1.0, got %.2f", threshold)
@@ -81,10 +84,10 @@ func runGateCheck(cmd *cobra.Command, args []string) error {
 		return runGateCheckRemote(cmd, server, baselineTraceID, model, provider, requestHeaders, threshold)
 	}
 
-	return runGateCheckLocal(cmd, baselineTraceID, model, provider, requestHeaders, threshold)
+	return runGateCheckLocal(cmd, baselineTraceID, model, provider, requestHeaders, threshold, maxTurns)
 }
 
-func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider string, requestHeaders map[string]string, threshold float64) error {
+func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider string, requestHeaders map[string]string, threshold float64, maxTurnsOverride int) error {
 	// Load config and validate agentgateway is configured
 	cfg, err := config.Load()
 	if err != nil {
@@ -117,17 +120,50 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 	}
 
 	// Run replay
-	cmd.Printf("Replaying baseline %s with model %s...\n", baselineTraceID, model)
-
 	engine := replay.NewEngine(store, client)
 	prepared, err := engine.Setup(ctx, baselineTraceID, variant, threshold)
 	if err != nil {
 		return fmt.Errorf("prepare replay: %w", err)
 	}
 
-	result, err := engine.Execute(ctx, prepared)
-	if err != nil {
-		return fmt.Errorf("replay failed: %w", err)
+	// Determine replay mode: agent loop vs prompt-only
+	var result *replay.Result
+	var agentLoopResult *replay.AgentLoopResult
+
+	if cfg.MCPURL != "" {
+		// Resolve max turns: flag > config > default
+		agentMaxTurns := cfg.AgentLoopMaxTurns
+		if maxTurnsOverride > 0 {
+			agentMaxTurns = maxTurnsOverride
+		}
+
+		// Extract freeze headers for MCP session
+		freezeHeaders := maps.Clone(requestHeaders)
+
+		cmd.Printf("Connecting to freeze-mcp at %s...\n", cfg.MCPURL)
+		toolExec, mcpErr := replay.NewMCPToolExecutor(ctx, cfg.MCPURL, freezeHeaders)
+		if mcpErr != nil {
+			cmd.PrintErrf("Warning: MCP connection failed (%v), falling back to prompt-only replay\n", mcpErr)
+		} else {
+			defer func() { _ = toolExec.Close() }()
+			cmd.Printf("Agent loop: replaying baseline %s with model %s (max %d turns)...\n", baselineTraceID, model, agentMaxTurns)
+			loopResult, loopErr := engine.ExecuteAgentLoop(ctx, prepared, toolExec, replay.AgentLoopConfig{MaxTurns: agentMaxTurns})
+			if loopErr != nil {
+				return fmt.Errorf("agent loop failed: %w", loopErr)
+			}
+			agentLoopResult = loopResult
+			result = &loopResult.Result
+		}
+	}
+
+	// Prompt-only fallback
+	if result == nil {
+		cmd.Printf("Prompt-only: replaying baseline %s with model %s...\n", baselineTraceID, model)
+		promptResult, err := engine.Execute(ctx, prepared)
+		if err != nil {
+			return fmt.Errorf("replay failed: %w", err)
+		}
+		result = promptResult
 	}
 
 	// Reload traces for diff comparison
@@ -161,6 +197,19 @@ func runGateCheckLocal(cmd *cobra.Command, baselineTraceID, model, provider stri
 
 	// Print summary
 	printGateReport(cmd, baselineTraceID, model, result.ExperimentID, report)
+
+	// Print agent loop summary if applicable
+	if agentLoopResult != nil {
+		cmd.Printf("\nAgent Loop Summary:\n")
+		cmd.Printf("  Turns:       %d\n", agentLoopResult.TurnsExecuted)
+		cmd.Printf("  Stop Reason: %s\n", agentLoopResult.StopReason)
+		if len(agentLoopResult.Divergences) > 0 {
+			cmd.Printf("  Divergences: %d\n", len(agentLoopResult.Divergences))
+			for _, d := range agentLoopResult.Divergences {
+				cmd.Printf("    turn %d: %s (%s)\n", d.Turn, d.ToolName, d.ErrorType)
+			}
+		}
+	}
 
 	if report.Verdict == "fail" {
 		return ErrGateFailed

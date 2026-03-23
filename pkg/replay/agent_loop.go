@@ -1,0 +1,293 @@
+package replay
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/lethaltrifecta/replay/pkg/agwclient"
+	"github.com/lethaltrifecta/replay/pkg/otelreceiver"
+	"github.com/lethaltrifecta/replay/pkg/storage"
+)
+
+// DefaultMaxTurns is the default limit for agent loop iterations.
+const DefaultMaxTurns = 8
+
+// AgentLoopConfig holds configuration for the agent loop.
+type AgentLoopConfig struct {
+	MaxTurns int
+}
+
+// DivergenceEvent records a point where the variant diverged from the baseline.
+type DivergenceEvent struct {
+	Turn      int    `json:"turn"`
+	ToolName  string `json:"tool_name"`
+	ErrorType string `json:"error_type"`
+	Message   string `json:"message"`
+}
+
+// AgentLoopResult extends Result with agent-loop-specific metadata.
+type AgentLoopResult struct {
+	Result
+	TurnsExecuted int               `json:"turns_executed"`
+	Divergences   []DivergenceEvent `json:"divergences,omitempty"`
+	StopReason    string            `json:"stop_reason"`
+}
+
+// ExecuteAgentLoop runs a real agent conversation: seed from step 0, send to variant LLM,
+// execute tool calls via the ToolExecutor (freeze-mcp), and repeat until the LLM stops
+// calling tools, a divergence occurs, or max turns is reached.
+func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, toolExec ToolExecutor, loopCfg AgentLoopConfig) (*AgentLoopResult, error) {
+	if len(prepared.BaselineSteps) == 0 {
+		return nil, storage.ErrTraceNotFound
+	}
+
+	maxTurns := loopCfg.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = DefaultMaxTurns
+	}
+
+	variantTraceID := uuid.New().String()
+	exp := prepared.Experiment
+	variantRun := prepared.VariantRun
+	variant := prepared.VariantConfig
+
+	result := &AgentLoopResult{
+		Result: Result{
+			ExperimentID:   prepared.ExperimentID,
+			BaselineRunID:  prepared.BaselineRunID,
+			VariantRunID:   prepared.VariantRunID,
+			VariantTraceID: variantTraceID,
+		},
+	}
+
+	// Extract initial messages/tools/tool_choice from baseline step 0
+	step0 := prepared.BaselineSteps[0]
+	messages, err := extractMessages(step0.Prompt)
+	if err != nil {
+		cleanupErr := e.failExperiment(exp, variantRun, err)
+		result.Error = err
+		if cleanupErr != nil {
+			return result, fmt.Errorf("extract messages: %w (cleanup: %v)", err, cleanupErr)
+		}
+		return result, fmt.Errorf("extract messages: %w", err)
+	}
+	tools, err := extractTools(step0.Prompt)
+	if err != nil {
+		cleanupErr := e.failExperiment(exp, variantRun, err)
+		result.Error = err
+		if cleanupErr != nil {
+			return result, fmt.Errorf("extract tools: %w (cleanup: %v)", err, cleanupErr)
+		}
+		return result, fmt.Errorf("extract tools: %w", err)
+	}
+	toolChoice, err := extractToolChoice(step0.Prompt)
+	if err != nil {
+		cleanupErr := e.failExperiment(exp, variantRun, err)
+		result.Error = err
+		if cleanupErr != nil {
+			return result, fmt.Errorf("extract tool choice: %w (cleanup: %v)", err, cleanupErr)
+		}
+		return result, fmt.Errorf("extract tool choice: %w", err)
+	}
+
+	for turn := 0; turn < maxTurns; turn++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			cleanupErr := e.failExperiment(exp, variantRun, ctxErr)
+			result.Error = ctxErr
+			if cleanupErr != nil {
+				return result, fmt.Errorf("%w (cleanup: %v)", ctxErr, cleanupErr)
+			}
+			return result, ctxErr
+		}
+
+		// Build and send LLM request
+		req := &agwclient.CompletionRequest{
+			Model:       variant.Model,
+			Messages:    messages,
+			Tools:       tools,
+			ToolChoice:  toolChoice,
+			Temperature: variant.Temperature,
+			TopP:        variant.TopP,
+			MaxTokens:   variant.MaxTokens,
+			Headers:     variant.RequestHeaders,
+		}
+
+		start := time.Now()
+		resp, err := e.client.Complete(ctx, req)
+		latencyMS := int(time.Since(start).Milliseconds())
+		if err != nil {
+			cleanupErr := e.failExperiment(exp, variantRun, err)
+			result.Error = err
+			if cleanupErr != nil {
+				return result, fmt.Errorf("llm call turn %d: %w (cleanup: %v)", turn, err, cleanupErr)
+			}
+			return result, fmt.Errorf("llm call turn %d: %w", turn, err)
+		}
+
+		// Parse response
+		var assistantMsg agwclient.ChatMessage
+		completion := ""
+		if len(resp.Choices) > 0 {
+			assistantMsg = resp.Choices[0].Message
+			completion = assistantMsg.Content
+		}
+
+		// Build metadata
+		metadata := storage.JSONB{
+			"source":            "agent_loop",
+			"baseline_trace_id": prepared.Experiment.BaselineTraceID,
+			"turn":              turn,
+		}
+		if len(tools) > 0 {
+			metadata["replay_tool_names"] = toolNamesFromDefinitions(tools)
+		}
+		if len(assistantMsg.ToolCalls) > 0 {
+			metadata["tool_calls"] = assistantMsg.ToolCalls
+		}
+
+		// Build prompt JSONB for this turn
+		prompt := buildPromptJSONB(messages, tools, toolChoice)
+
+		// Store ReplayTrace for this turn
+		variantTrace := &storage.ReplayTrace{
+			TraceID:          variantTraceID,
+			SpanID:           uuid.New().String(),
+			RunID:            variantTraceID,
+			StepIndex:        turn,
+			CreatedAt:        time.Now(),
+			Provider:         variant.Provider,
+			Model:            resp.Model,
+			Prompt:           prompt,
+			Completion:       completion,
+			Parameters:       storage.JSONB{},
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+			LatencyMS:        latencyMS,
+			Metadata:         metadata,
+		}
+
+		if err := e.store.CreateReplayTrace(ctx, variantTrace); err != nil {
+			cleanupErr := e.failExperiment(exp, variantRun, err)
+			result.Error = err
+			if cleanupErr != nil {
+				return result, fmt.Errorf("store turn %d: %w (cleanup: %v)", turn, err, cleanupErr)
+			}
+			return result, fmt.Errorf("store turn %d: %w", turn, err)
+		}
+
+		result.Steps = append(result.Steps, variantTrace)
+		result.TurnsExecuted = turn + 1
+
+		// Update progress
+		exp.Progress = float64(turn+1) / float64(maxTurns)
+		_ = e.store.UpdateExperiment(ctx, exp)
+
+		// Append assistant message to conversation
+		messages = append(messages, assistantMsg)
+
+		// If no tool calls, we're done
+		if len(assistantMsg.ToolCalls) == 0 {
+			result.StopReason = "no_tool_calls"
+			break
+		}
+
+		// Execute each tool call
+		diverged := false
+		for _, tc := range assistantMsg.ToolCalls {
+			var toolArgs map[string]any
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &toolArgs); err != nil {
+				toolArgs = map[string]any{"_raw": tc.Function.Arguments}
+			}
+
+			toolResult, toolErr := toolExec.CallTool(ctx, tc.Function.Name, toolArgs)
+			if toolErr != nil {
+				// Transport-level error — fail the experiment
+				cleanupErr := e.failExperiment(exp, variantRun, toolErr)
+				result.Error = toolErr
+				if cleanupErr != nil {
+					return result, fmt.Errorf("tool call %s turn %d: %w (cleanup: %v)", tc.Function.Name, turn, toolErr, cleanupErr)
+				}
+				return result, fmt.Errorf("tool call %s turn %d: %w", tc.Function.Name, turn, toolErr)
+			}
+
+			// Store ToolCapture (non-fatal if it fails — audit data)
+			argsJSONB := storage.JSONB(toolArgs)
+			capture := &storage.ToolCapture{
+				TraceID:   variantTraceID,
+				SpanID:    variantTrace.SpanID,
+				StepIndex: turn,
+				ToolName:  tc.Function.Name,
+				Args:      argsJSONB,
+				ArgsHash:  otelreceiver.CalculateCaptureArgsHash(argsJSONB),
+				Result:    storage.JSONB{"content": toolResult.Content},
+				LatencyMS: toolResult.LatencyMS,
+				RiskClass: otelreceiver.DetermineCaptureRiskClass(tc.Function.Name, argsJSONB),
+				CreatedAt: time.Now(),
+			}
+			if toolResult.IsError {
+				errStr := toolResult.Content
+				capture.Error = &errStr
+			}
+			_ = e.store.CreateToolCapture(ctx, capture)
+
+			// Check for divergence (tool_not_captured)
+			if toolResult.IsError && toolResult.ErrorType == "tool_not_captured" {
+				result.Divergences = append(result.Divergences, DivergenceEvent{
+					Turn:      turn,
+					ToolName:  tc.Function.Name,
+					ErrorType: toolResult.ErrorType,
+					Message:   fmt.Sprintf("variant called %s which was not in the baseline capture", tc.Function.Name),
+				})
+				result.StopReason = "divergence"
+				diverged = true
+				break
+			}
+
+			// Append tool result message for the LLM
+			messages = append(messages, agwclient.ChatMessage{
+				Role:       "tool",
+				Content:    toolResult.Content,
+				ToolCallID: tc.ID,
+			})
+		}
+
+		if diverged {
+			break
+		}
+
+		// If we've exhausted max turns
+		if turn == maxTurns-1 {
+			result.StopReason = "max_turns"
+		}
+	}
+
+	if result.StopReason == "" {
+		result.StopReason = "max_turns"
+	}
+
+	// Finalize: mark experiment completed (divergence is a valid result, not a failure)
+	if err := e.finalizeSuccess(ctx, exp, variantRun, variantTraceID); err != nil {
+		return result, err
+	}
+
+	return result, nil
+}
+
+// buildPromptJSONB constructs a prompt JSONB matching the baseline format.
+func buildPromptJSONB(messages []agwclient.ChatMessage, tools []agwclient.ToolDefinition, toolChoice any) storage.JSONB {
+	prompt := storage.JSONB{
+		"messages": messages,
+	}
+	if len(tools) > 0 {
+		prompt["tools"] = tools
+	}
+	if toolChoice != nil {
+		prompt["tool_choice"] = toolChoice
+	}
+	return prompt
+}

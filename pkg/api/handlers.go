@@ -326,7 +326,25 @@ func (s *Server) CreateGateCheck(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer func() { <-s.sem }()
-		RunGatePipeline(s.ctx, s.store, engine, prepared, threshold, s.log)
+
+		var toolExec replay.ToolExecutor
+		if s.mcpURL != "" {
+			freezeHeaders := storageRequestHeadersFromAPI(req.RequestHeaders)
+			te, mcpErr := replay.NewMCPToolExecutor(s.ctx, s.mcpURL, freezeHeaders)
+			if mcpErr != nil {
+				s.log.Warnw("MCP connection failed, falling back to prompt-only replay",
+					"experiment_id", prepared.ExperimentID,
+					"mcp_url", s.mcpURL,
+					"error", mcpErr,
+				)
+			} else {
+				toolExec = te
+				defer func() { _ = te.Close() }()
+			}
+		}
+
+		loopCfg := replay.AgentLoopConfig{MaxTurns: s.agentLoopMaxTurns}
+		RunGatePipeline(s.ctx, s.store, engine, prepared, threshold, s.log, toolExec, loopCfg)
 	}()
 }
 

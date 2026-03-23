@@ -17,17 +17,21 @@ import (
 type ServerConfig struct {
 	Port                 int
 	MaxConcurrentReplays int
+	MCPURL               string
+	AgentLoopMaxTurns    int
 }
 
 // Server is the HTTP API server for CMDR gate operations.
 type Server struct {
-	httpServer *http.Server
-	store      storage.Storage
-	completer  replay.Completer
-	log        *logger.Logger
-	sem        chan struct{} // concurrency limiter
-	ctx        context.Context
-	cancel     context.CancelFunc
+	httpServer        *http.Server
+	store             storage.Storage
+	completer         replay.Completer
+	log               *logger.Logger
+	sem               chan struct{} // concurrency limiter
+	ctx               context.Context
+	cancel            context.CancelFunc
+	mcpURL            string
+	agentLoopMaxTurns int
 }
 
 func isNilCompleter(completer replay.Completer) bool {
@@ -55,12 +59,14 @@ func NewServer(cfg ServerConfig, store storage.Storage, completer replay.Complet
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Server{
-		store:     store,
-		completer: completer,
-		log:       log,
-		sem:       make(chan struct{}, cfg.MaxConcurrentReplays),
-		ctx:       ctx,
-		cancel:    cancel,
+		store:             store,
+		completer:         completer,
+		log:               log,
+		sem:               make(chan struct{}, cfg.MaxConcurrentReplays),
+		ctx:               ctx,
+		cancel:            cancel,
+		mcpURL:            cfg.MCPURL,
+		agentLoopMaxTurns: cfg.AgentLoopMaxTurns,
 	}
 
 	h := HandlerWithOptions(s, StdHTTPServerOptions{
