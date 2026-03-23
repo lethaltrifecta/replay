@@ -48,6 +48,7 @@ dist/
 build/
 artifacts/
 /cmdr
+/.worktrees/
 
 # Review artifacts
 tmp_review/
