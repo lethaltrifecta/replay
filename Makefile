@@ -171,7 +171,7 @@ demo: build ## Run the hackathon demo (requires PostgreSQL: make dev-up)
 # ============================================================================
 
 ui-install: ## Install UI dependencies
-	pnpm --dir ui install
+	pnpm --dir ui install --frozen-lockfile
 
 ui-generate: ## Regenerate the UI OpenAPI client
 	pnpm --dir ui generate

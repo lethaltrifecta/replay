@@ -1,14 +1,17 @@
 import {
   compareTraces as compareTracesRequest,
   createBaseline as createBaselineRequest,
+  createGateCheck as createGateCheckRequest,
   deleteBaseline as deleteBaselineRequest,
   getDriftResult as getDriftResultRequest,
   getExperiment as getExperimentRequest,
   getExperimentReport as getExperimentReportRequest,
+  getGateStatus as getGateStatusRequest,
   listBaselines as listBaselinesRequest,
   listDriftResults as listDriftResultsRequest,
   listExperiments as listExperimentsRequest,
   listTraces as listTracesRequest,
+  type GateCheckRequest,
 } from "./generated";
 import { client } from "./generated/client.gen";
 
@@ -21,6 +24,8 @@ export type {
   ExperimentDetail,
   ExperimentReport,
   ExperimentRun,
+  GateCheckRequest,
+  GateCheckResponse,
   ToolCapture,
   TraceComparison,
   TraceDetail,
@@ -152,6 +157,14 @@ export class GovernanceService {
 
   static getDriftResult(traceId: string, baselineTraceId?: string) {
     return wrapRequest(getDriftResultRequest({ ...REQUEST_OPTIONS, path: { traceId }, query: { baselineTraceId } }));
+  }
+
+  static createGateCheck(requestBody: GateCheckRequest) {
+    return wrapRequest(createGateCheckRequest({ ...REQUEST_OPTIONS, body: requestBody }));
+  }
+
+  static getGateStatus(id: string) {
+    return wrapRequest(getGateStatusRequest({ ...REQUEST_OPTIONS, path: { id } }));
   }
 }
 
