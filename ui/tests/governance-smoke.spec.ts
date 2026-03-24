@@ -14,7 +14,7 @@ test("selection flows into compare with fixture-backed data", async ({ page }) =
   await expect(page.getByText("Selected baseline").first()).toBeVisible();
   await expect(page.getByText("Selected candidate").first()).toBeVisible();
 
-  await page.getByRole("link", { name: "Compare selected pair" }).click();
+  await page.getByRole("link", { name: "Open Shadow Replay" }).first().click();
 
   await expect(page.getByText("Shadow Replay").first()).toBeVisible();
   await expect(page.getByText("Candidate issued a destructive rollback instead of a read-only audit query.")).toBeVisible();
