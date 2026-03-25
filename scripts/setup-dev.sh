@@ -18,10 +18,10 @@ fi
 
 # Check if docker compose is available (V2 - newer)
 if command -v docker &> /dev/null && docker compose version &> /dev/null; then
-    DOCKER_COMPOSE="docker compose"
+    DOCKER_COMPOSE="docker compose -f docker-compose.dev.yml"
 # Check if docker-compose is available (V1 - older)
 elif command -v docker-compose &> /dev/null; then
-    DOCKER_COMPOSE="docker-compose"
+    DOCKER_COMPOSE="docker-compose -f docker-compose.dev.yml"
 else
     echo "❌ Docker Compose not found. Please install Docker and Docker Compose."
     echo "   Visit: https://docs.docker.com/get-docker/"

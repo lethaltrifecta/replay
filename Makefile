@@ -18,7 +18,8 @@ GOMOD=$(GOCMD) mod
 GOFMT=$(GOCMD) fmt
 
 # Docker Compose command (detect V2 or V1)
-DOCKER_COMPOSE=$(shell if docker compose version > /dev/null 2>&1; then echo "docker compose"; else echo "docker-compose"; fi)
+DOCKER_COMPOSE_FILE=docker-compose.dev.yml
+DOCKER_COMPOSE=$(shell if docker compose version > /dev/null 2>&1; then echo "docker compose -f $(DOCKER_COMPOSE_FILE)"; else echo "docker-compose -f $(DOCKER_COMPOSE_FILE)"; fi)
 
 # Build flags
 LDFLAGS=-ldflags "-X main.Version=$(VERSION)"

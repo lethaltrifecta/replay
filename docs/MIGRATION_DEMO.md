@@ -17,7 +17,7 @@ The scenario is a database migration assistant with both safe and dangerous tool
 
 The demo stack uses:
 
-- Docker PostgreSQL from this repo's `docker-compose.yml`
+- Docker PostgreSQL from this repo's `docker-compose.dev.yml`
 - `cmdr serve` for OTLP ingestion
 - `freeze-mcp` for frozen tool replay
 - a Go mock MCP migration tool server for the live baseline

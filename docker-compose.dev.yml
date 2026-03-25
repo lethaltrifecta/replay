@@ -1,8 +1,5 @@
 # Dev stack: replay (CMDR) + agentgateway + mock LLM + freeze-mcp + PostgreSQL
 #
-# NOTE: Stop the base docker-compose.yml stack first to avoid port conflicts:
-#   docker compose down
-#
 # Usage:
 #   docker compose -f docker-compose.dev.yml up -d        # start all
 #   docker compose -f docker-compose.dev.yml logs -f cmdr  # tail CMDR logs
@@ -10,6 +7,7 @@
 #
 # Once running:
 #   - CMDR API:        http://localhost:8080
+#   - Replay UI:       http://localhost:3000
 #   - CMDR OTLP gRPC:  localhost:4317
 #   - CMDR OTLP HTTP:  http://localhost:4318
 #   - agentgateway LLM proxy:  http://localhost:3001
@@ -146,6 +144,26 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+  # --- Replay governance UI ---
+
+  replay-web:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+      args:
+        REPLAY_API_ORIGIN: http://cmdr:8080
+    container_name: cmdr-dev-replay-web
+    depends_on:
+      cmdr:
+        condition: service_started
+    environment:
+      REPLAY_API_ORIGIN: http://cmdr:8080
+      NEXT_PUBLIC_REPLAY_API_BASE: /api/v1
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
 
 volumes:
   dev_postgres_data:

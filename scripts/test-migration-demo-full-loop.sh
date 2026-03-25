@@ -207,7 +207,7 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-docker compose up -d postgres >/dev/null
+docker compose -f docker-compose.dev.yml up -d postgres >/dev/null
 
 if ! run_migration_demo_verify wait-postgres --url "$CMDR_POSTGRES_URL" --timeout 30s; then
   echo "PostgreSQL is not reachable at $CMDR_POSTGRES_URL"
