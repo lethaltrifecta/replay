@@ -36,6 +36,22 @@ The app uses:
 
 See [`.env.example`](/Users/kevin/git/lethaltrifecta/replay/.claude/worktrees/ui-phase-2/ui/.env.example).
 
+## Container Deployment
+
+The repo now supports a two-container layout:
+
+- `cmdr` for the API
+- `replay-web` for the Next UI
+
+Bring them up together with Docker Compose:
+
+```bash
+docker compose up --build postgres jaeger cmdr replay-web
+```
+
+The UI is exposed on `http://localhost:3000` and proxies `/api/v1/*` to the
+`cmdr` service over the Compose network.
+
 ## Quality Checks
 
 Run the full local UI loop:
