@@ -76,17 +76,16 @@ Why this shape works:
 The working migration-demo mapping is:
 
 ```yaml
-config:
+frontendPolicies:
   tracing:
-    fields:
-      add:
-        gen_ai.operation.name: 'default(json(request.body).method == "tools/call" ? "execute_tool" : "", "")'
-        gen_ai.tool.call.arguments: 'default(json(request.body).method == "tools/call" ? toJson(json(request.body).params.arguments) : "", "")'
-        gen_ai.tool.call.result: 'default(json(request.body).method == "tools/call" ? toJson(json(string(response.body).trim().stripPrefix("data: ")).result.structuredContent) : "", "")'
-        error.message: 'default(json(request.body).method == "tools/call" ? default(json(string(response.body).trim().stripPrefix("data: ")).result.structuredContent.error.message, "") : "", "")'
+    attributes:
+      gen_ai.operation.name: 'default(json(request.body).method == "tools/call" ? "execute_tool" : "", "")'
+      gen_ai.tool.call.arguments: 'default(json(request.body).method == "tools/call" ? toJson(json(request.body).params.arguments) : "", "")'
+      gen_ai.tool.call.result: 'default(json(request.body).method == "tools/call" ? toJson(json(string(response.body).trim().stripPrefix("data: ")).result.structuredContent) : "", "")'
+      error.message: 'default(json(request.body).method == "tools/call" ? default(json(string(response.body).trim().stripPrefix("data: ")).result.structuredContent.error.message, default(json(string(response.body).trim().stripPrefix("data: ")).error.message, "")) : "", "")'
 ```
 
-That bridge takes MCP request/response bodies that `agentgateway` already sees and turns them into the semconv fields CMDR parses into `ToolCapture`.
+That bridge takes MCP request and response bodies that `agentgateway` already sees and maps them into the semconv-aligned fields CMDR parses into `ToolCapture`.
 The `tools/call` guard is important: touching `response.body` on the MCP stream GET path will buffer the stream and break replay sessions.
 
 ## Live Validation Result
