@@ -1,8 +1,5 @@
 # Dev stack: replay (CMDR) + agentgateway + mock LLM + freeze-mcp + PostgreSQL
 #
-# NOTE: Stop the base docker-compose.yml stack first to avoid port conflicts:
-#   docker compose down
-#
 # Usage:
 #   docker compose -f docker-compose.dev.yml up -d        # start all
 #   docker compose -f docker-compose.dev.yml logs -f cmdr  # tail CMDR logs

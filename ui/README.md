@@ -46,7 +46,7 @@ The repo now supports a two-container layout:
 Bring them up together with Docker Compose:
 
 ```bash
-docker compose up --build postgres jaeger cmdr replay-web
+docker compose -f docker-compose.dev.yml up --build postgres jaeger cmdr replay-web
 ```
 
 The UI is exposed on `http://localhost:3000` and proxies `/api/v1/*` to the
