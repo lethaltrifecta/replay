@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL database
   postgres:
@@ -52,7 +50,24 @@ services:
       - "8080:8080"    # HTTP API
       - "4317:4317"    # OTLP gRPC
       - "4318:4318"    # OTLP HTTP
-      - "9090:9090"    # Freeze-Tools MCP
+      - "${CMDR_FREEZETOOLS_HOST_PORT:-9090}:9090"    # Freeze-Tools MCP
+
+  replay-web:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+      args:
+        REPLAY_API_ORIGIN: http://cmdr:8080
+    container_name: replay-web
+    depends_on:
+      - cmdr
+    environment:
+      REPLAY_API_ORIGIN: http://cmdr:8080
+      NEXT_PUBLIC_REPLAY_API_BASE: /api/v1
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
 
 volumes:
   postgres_data:
