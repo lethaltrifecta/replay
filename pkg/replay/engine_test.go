@@ -40,9 +40,11 @@ func (m *mockCompleter) Complete(ctx context.Context, req *agwclient.CompletionR
 
 type mockStorage struct {
 	replayTraces    map[string][]*storage.ReplayTrace
+	toolCaptures    map[string][]*storage.ToolCapture
 	experiments     map[uuid.UUID]*storage.Experiment
 	experimentRuns  map[uuid.UUID]*storage.ExperimentRun
 	createdReplays  []*storage.ReplayTrace
+	createdCaptures []*storage.ToolCapture
 	analysisResults []*storage.AnalysisResult
 
 	createExperimentRunHook func(run *storage.ExperimentRun) error
@@ -148,8 +150,14 @@ func (m *mockStorage) ListReplayTraces(_ context.Context, _ storage.TraceFilters
 func (m *mockStorage) CreateIngestionBatch(_ context.Context, _ []*storage.OTELTrace, _ []*storage.ReplayTrace, _ []*storage.ToolCapture) (storage.IngestCounts, error) {
 	return storage.IngestCounts{}, nil
 }
-func (m *mockStorage) CreateToolCapture(_ context.Context, _ *storage.ToolCapture) error { return nil }
-func (m *mockStorage) GetToolCapturesByTrace(_ context.Context, _ string) ([]*storage.ToolCapture, error) {
+func (m *mockStorage) CreateToolCapture(_ context.Context, cap *storage.ToolCapture) error {
+	m.createdCaptures = append(m.createdCaptures, cap)
+	return nil
+}
+func (m *mockStorage) GetToolCapturesByTrace(_ context.Context, traceID string) ([]*storage.ToolCapture, error) {
+	if m.toolCaptures != nil {
+		return m.toolCaptures[traceID], nil
+	}
 	return nil, nil
 }
 func (m *mockStorage) GetToolCaptureByArgs(_ context.Context, _ string, _ string) (*storage.ToolCapture, error) {

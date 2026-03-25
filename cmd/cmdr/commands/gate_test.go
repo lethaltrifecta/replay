@@ -322,7 +322,7 @@ func TestRunGateCheckRemote_UsesGeneratedClient(t *testing.T) {
 	cmd.SetOut(out)
 	cmd.SetErr(out)
 
-	err := runGateCheckRemote(cmd, server.URL, "baseline-trace", "gpt-4o", "openai", map[string]string{"X-Freeze-Trace-Id": "baseline-trace"}, 0.9)
+	err := runGateCheckRemote(cmd, server.URL, "baseline-trace", "gpt-4o", "openai", map[string]string{"X-Freeze-Trace-Id": "baseline-trace"}, 0.9, 0)
 	require.NoError(t, err)
 	require.NotNil(t, submittedBody)
 	assert.Equal(t, "baseline-trace", submittedBody["baselineTraceId"])
@@ -347,7 +347,7 @@ func TestRunGateCheckRemote_ServerErrorIncludesAPIError(t *testing.T) {
 	defer server.Close()
 
 	cmd := &cobra.Command{}
-	err := runGateCheckRemote(cmd, server.URL, "baseline-trace", "gpt-4o", "", nil, 0.8)
+	err := runGateCheckRemote(cmd, server.URL, "baseline-trace", "gpt-4o", "", nil, 0.8, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "submit gate check")
 	assert.Contains(t, err.Error(), "agentgateway not configured")
@@ -383,7 +383,7 @@ func TestRunGateCheckRemote_CancelledStatusReturnsTerminalError(t *testing.T) {
 	defer server.Close()
 
 	cmd := &cobra.Command{}
-	err := runGateCheckRemote(cmd, server.URL, "baseline-trace", "gpt-4o", "", nil, 0.8)
+	err := runGateCheckRemote(cmd, server.URL, "baseline-trace", "gpt-4o", "", nil, 0.8, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "experiment cancelled")
 }

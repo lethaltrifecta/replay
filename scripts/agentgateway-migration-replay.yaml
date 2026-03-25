@@ -7,7 +7,10 @@ frontendPolicies:
       gen_ai.system: 'llm.provider'
       gen_ai.prompt: 'flatten_recursive(llm.prompt)'
       gen_ai.completion: 'flatten_recursive(llm.completion.map(c, {"role":"assistant", "content": c}))'
-      gen_ai.operation.name: 'mcp.tool.name != null ? "execute_tool" : null'
+      gen_ai.operation.name: 'default(json(request.body).method == "tools/call" ? "execute_tool" : "", "")'
+      gen_ai.tool.call.arguments: 'default(json(request.body).method == "tools/call" ? toJson(json(request.body).params.arguments) : "", "")'
+      gen_ai.tool.call.result: 'default(json(request.body).method == "tools/call" ? toJson(json(string(response.body).trim().stripPrefix("data: ")).result.structuredContent) : "", "")'
+      error.message: 'default(json(request.body).method == "tools/call" ? default(json(string(response.body).trim().stripPrefix("data: ")).result.structuredContent.error.message, default(json(string(response.body).trim().stripPrefix("data: ")).error.message, "")) : "", "")'
 
 binds:
 - port: 3202

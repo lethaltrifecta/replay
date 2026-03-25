@@ -1,8 +1,5 @@
 # Dev stack: replay (CMDR) + agentgateway + mock LLM + freeze-mcp + PostgreSQL
 #
-# NOTE: Stop the base docker-compose.yml stack first to avoid port conflicts:
-#   docker compose down
-#
 # Usage:
 #   docker compose -f docker-compose.dev.yml up -d        # start all
 #   docker compose -f docker-compose.dev.yml logs -f cmdr  # tail CMDR logs
@@ -10,6 +7,7 @@
 #
 # Once running:
 #   - CMDR API:        http://localhost:8080
+#   - Replay UI:       http://localhost:3000
 #   - CMDR OTLP gRPC:  localhost:4317
 #   - CMDR OTLP HTTP:  http://localhost:4318
 #   - agentgateway LLM proxy:  http://localhost:3001
@@ -68,6 +66,8 @@ services:
       CMDR_LOG_LEVEL: debug
       CMDR_POSTGRES_URL: postgres://cmdr:cmdr_dev_password@postgres:5432/cmdr?sslmode=disable
       CMDR_AGENTGATEWAY_URL: http://agentgateway:3001
+      CMDR_MCP_URL: http://freeze-mcp:9090/mcp
+      CMDR_AGENT_LOOP_MAX_TURNS: "8"
       CMDR_OTLP_GRPC_ENDPOINT: 0.0.0.0:4317
       CMDR_OTLP_HTTP_ENDPOINT: 0.0.0.0:4318
     ports:
@@ -84,7 +84,7 @@ services:
   # --- Mock LLM (OpenAI-compatible) ---
 
   mock-llm:
-    image: golang:1.24
+    image: golang:1.26
     container_name: cmdr-dev-mock-llm
     working_dir: /app
     volumes:
@@ -124,16 +124,46 @@ services:
   # --- freeze-mcp (frozen tool responses) ---
 
   freeze-mcp:
-    build: ../freeze-mcp
+    build:
+      context: ..
+      dockerfile: replay/dockerfiles/freeze-mcp.dev.Dockerfile
     container_name: cmdr-dev-freeze-mcp
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       CMDR_POSTGRES_URL: postgres://cmdr:cmdr_dev_password@postgres:5432/cmdr?sslmode=disable
+      FREEZE_TRACE_ID: "default"
       FREEZE_PORT: "9090"
+      LOG_LEVEL: debug
     ports:
       - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # --- Replay governance UI ---
+
+  replay-web:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+      args:
+        REPLAY_API_ORIGIN: http://cmdr:8080
+    container_name: cmdr-dev-replay-web
+    depends_on:
+      cmdr:
+        condition: service_started
+    environment:
+      REPLAY_API_ORIGIN: http://cmdr:8080
+      NEXT_PUBLIC_REPLAY_API_BASE: /api/v1
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
 
 volumes:
   dev_postgres_data:

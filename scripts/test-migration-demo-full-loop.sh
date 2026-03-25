@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+AGW_BIN="${AGW_BIN:-}"
+AGW_CARGO_TARGET_DIR="${AGW_CARGO_TARGET_DIR:-/tmp/agentgateway-quick-target}"
 CMDR_POSTGRES_URL="${CMDR_POSTGRES_URL:-postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable}"
 CMDR_OTLP_URL="${CMDR_OTLP_URL:-http://127.0.0.1:4318}"
 CMDR_API_URL="${CMDR_API_URL:-http://127.0.0.1:8080/api/v1}"
@@ -60,6 +62,22 @@ resolve_repo_dir() {
 
 AGENTGATEWAY_DIR="$(resolve_repo_dir "${AGENTGATEWAY_DIR:-}" "agentgateway" "$ROOT_DIR/../../agentgateway" "$ROOT_DIR/../agentgateway")"
 FREEZE_DIR="$(resolve_repo_dir "${FREEZE_DIR:-}" "freeze" "$ROOT_DIR/../../freeze-mcp" "$ROOT_DIR/../freeze-mcp")"
+
+ensure_agentgateway_bin() {
+  if [ -n "$AGW_BIN" ]; then
+    return 0
+  fi
+
+  AGW_BIN="$AGW_CARGO_TARGET_DIR/quick-release/agentgateway"
+  if [ -x "$AGW_BIN" ]; then
+    return 0
+  fi
+
+  (
+    cd "$AGENTGATEWAY_DIR"
+    CARGO_TARGET_DIR="$AGW_CARGO_TARGET_DIR" cargo build --profile quick-release -p agentgateway-app
+  )
+}
 
 if [ -z "$GO_BIN" ]; then
   GO_BIN="$(command -v go 2>/dev/null || true)"
@@ -207,7 +225,9 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-docker compose up -d postgres >/dev/null
+ensure_agentgateway_bin
+
+docker compose -f docker-compose.dev.yml up -d postgres >/dev/null
 
 if ! run_migration_demo_verify wait-postgres --url "$CMDR_POSTGRES_URL" --timeout 30s; then
   echo "PostgreSQL is not reachable at $CMDR_POSTGRES_URL"
@@ -253,8 +273,7 @@ disown "$LLM_PID" >/dev/null 2>&1 || true
 wait_for_port "18083" "mock migration OpenAI upstream"
 
 (
-  cd "$AGENTGATEWAY_DIR"
-  CARGO_TARGET_DIR=/tmp/agentgateway-target cargo run -p agentgateway-app -- -f "$ROOT_DIR/scripts/agentgateway-migration-capture.yaml"
+  "$AGW_BIN" -f "$ROOT_DIR/scripts/agentgateway-migration-capture.yaml"
 ) >"$CAPTURE_AGW_LOG" 2>&1 &
 CAPTURE_AGW_PID=$!
 disown "$CAPTURE_AGW_PID" >/dev/null 2>&1 || true
@@ -289,8 +308,7 @@ wait_for_agentgateway_admin_clear || true
 CAPTURE_AGW_PID=""
 
 (
-  cd "$AGENTGATEWAY_DIR"
-  CARGO_TARGET_DIR=/tmp/agentgateway-target cargo run -p agentgateway-app -- -f "$ROOT_DIR/scripts/agentgateway-migration-replay.yaml"
+  "$AGW_BIN" -f "$ROOT_DIR/scripts/agentgateway-migration-replay.yaml"
 ) >"$REPLAY_AGW_LOG" 2>&1 &
 REPLAY_AGW_PID=$!
 disown "$REPLAY_AGW_PID" >/dev/null 2>&1 || true

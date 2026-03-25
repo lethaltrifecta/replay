@@ -223,14 +223,17 @@ type FirstDivergence struct {
 
 // GateCheckRequest defines model for GateCheckRequest.
 type GateCheckRequest struct {
-	BaselineTraceId string                `json:"baselineTraceId"`
-	MaxTokens       *int                  `json:"maxTokens,omitempty"`
-	Model           string                `json:"model"`
-	Provider        *string               `json:"provider,omitempty"`
-	RequestHeaders  *ReplayRequestHeaders `json:"requestHeaders,omitempty"`
-	Temperature     *float32              `json:"temperature,omitempty"`
-	Threshold       *float32              `json:"threshold,omitempty"`
-	TopP            *float32              `json:"topP,omitempty"`
+	BaselineTraceId string `json:"baselineTraceId"`
+	MaxTokens       *int   `json:"maxTokens,omitempty"`
+
+	// MaxTurns Maximum agent loop turns (overrides server default)
+	MaxTurns       *int                  `json:"maxTurns,omitempty"`
+	Model          string                `json:"model"`
+	Provider       *string               `json:"provider,omitempty"`
+	RequestHeaders *ReplayRequestHeaders `json:"requestHeaders,omitempty"`
+	Temperature    *float32              `json:"temperature,omitempty"`
+	Threshold      *float32              `json:"threshold,omitempty"`
+	TopP           *float32              `json:"topP,omitempty"`
 }
 
 // GateCheckResponse defines model for GateCheckResponse.

@@ -1,4 +1,4 @@
-.PHONY: help build build-all test test-all test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset generate
+.PHONY: help build build-all test test-all test-integration test-e2e test-e2e-replay-freeze test-e2e-freeze-contract test-agent-loop-freeze test-migration-demo-full-loop lint fmt clean run docker-build docker-run setup-dev dev-up dev-down dev-reset generate ui-install ui-generate ui-dev ui-build ui-typecheck ui-lint ui-test-e2e
 
 # Binary name
 BINARY_NAME=cmdr
@@ -8,8 +8,6 @@ BUILD_DIR=bin
 # Tools
 OAPI_CODEGEN_VERSION=v2.6.0
 OAPI_CODEGEN=go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
-OPENAPI_TS_CODEGEN_VERSION=0.29.0
-
 # Go parameters
 GOCMD=go
 GOBUILD=$(GOCMD) build
@@ -20,7 +18,8 @@ GOMOD=$(GOCMD) mod
 GOFMT=$(GOCMD) fmt
 
 # Docker Compose command (detect V2 or V1)
-DOCKER_COMPOSE=$(shell if docker compose version > /dev/null 2>&1; then echo "docker compose"; else echo "docker-compose"; fi)
+DOCKER_COMPOSE_FILE=docker-compose.dev.yml
+DOCKER_COMPOSE=$(shell if docker compose version > /dev/null 2>&1; then echo "docker compose -f $(DOCKER_COMPOSE_FILE)"; else echo "docker-compose -f $(DOCKER_COMPOSE_FILE)"; fi)
 
 # Build flags
 LDFLAGS=-ldflags "-X main.Version=$(VERSION)"
@@ -65,13 +64,12 @@ generate: ## Generate code from OpenAPI spec
 	@echo "Generating OpenAPI code..."
 	@mkdir -p pkg/api
 	@mkdir -p pkg/apiclient
-	@mkdir -p ui/packages/api
 	$(OAPI_CODEGEN) -config api/oapi-server.cfg.yaml api/openapi.yaml
 	$(OAPI_CODEGEN) -config api/oapi-client.cfg.yaml api/openapi.yaml
-	bash scripts/generate-openapi-ts.sh "$(OPENAPI_TS_CODEGEN_VERSION)" api/openapi.yaml ui/packages/api
+	pnpm --dir ui generate
 	@echo "✅ Generated pkg/api/openapi_generated.gen.go"
 	@echo "✅ Generated pkg/apiclient/client.gen.go"
-	@echo "✅ Generated ui/packages/api"
+	@echo "✅ Generated ui/lib/api/generated"
 
 # ============================================================================
 # Build
@@ -168,5 +166,30 @@ docker-run: ## Run Docker container
 demo: build ## Run the hackathon demo (requires PostgreSQL: make dev-up)
 	@echo "Starting demo (requires PostgreSQL: make dev-up)..."
 	@bash scripts/demo.sh
+
+# ============================================================================
+# UI
+# ============================================================================
+
+ui-install: ## Install UI dependencies
+	pnpm --dir ui install --frozen-lockfile
+
+ui-generate: ## Regenerate the UI OpenAPI client
+	pnpm --dir ui generate
+
+ui-dev: ## Run the governance review UI
+	pnpm --dir ui dev
+
+ui-build: ## Build the governance review UI
+	pnpm --dir ui build
+
+ui-typecheck: ## Typecheck the governance review UI
+	pnpm --dir ui typecheck
+
+ui-lint: ## Lint the governance review UI
+	pnpm --dir ui lint
+
+ui-test-e2e: ## Run UI Playwright smoke tests
+	pnpm --dir ui test:e2e
 
 .DEFAULT_GOAL := help

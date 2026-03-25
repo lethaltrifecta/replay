@@ -7,6 +7,47 @@ on:
     branches: [ main ]
 
 jobs:
+  ui:
+    name: UI
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10.28.2
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: ui/pnpm-lock.yaml
+
+    - name: Install UI dependencies
+      run: make ui-install
+
+    - name: Generate UI client
+      run: make ui-generate
+
+    - name: Lint UI
+      run: make ui-lint
+
+    - name: Typecheck UI
+      run: make ui-typecheck
+
+    - name: Build UI
+      run: make ui-build
+
+    - name: Install Playwright browsers
+      run: pnpm --dir ui exec playwright install --with-deps chromium
+
+    - name: Run UI smoke tests
+      run: make ui-test-e2e
+
   test:
     name: Test
     runs-on: ubuntu-latest

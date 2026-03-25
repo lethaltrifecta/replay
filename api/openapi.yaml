@@ -423,6 +423,9 @@ components:
           format: float
         maxTokens:
           type: integer
+        maxTurns:
+          type: integer
+          description: Maximum agent loop turns (overrides server default)
         requestHeaders:
           $ref: '#/components/schemas/ReplayRequestHeaders'
 
