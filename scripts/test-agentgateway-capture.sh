@@ -6,6 +6,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGW_CONFIG="${AGW_CONFIG:-$ROOT_DIR/scripts/agentgateway-cmdr-capture.yaml}"
 AGW_PORT="${AGW_PORT:-3001}"
 MOCK_PORT="${MOCK_PORT:-18080}"
+AGW_BIN="${AGW_BIN:-}"
+AGW_CARGO_TARGET_DIR="${AGW_CARGO_TARGET_DIR:-/tmp/agentgateway-quick-target}"
 CMDR_OTLP_HEALTH_URL="${CMDR_OTLP_HEALTH_URL:-http://127.0.0.1:4318/health}"
 CMDR_API_URL="${CMDR_API_URL:-http://127.0.0.1:8080/api/v1}"
 GO_BIN="${GO_BIN:-}"
@@ -66,6 +68,22 @@ resolve_repo_dir() {
 
 AGENTGATEWAY_DIR="$(resolve_repo_dir "${AGENTGATEWAY_DIR:-}" "agentgateway" "$ROOT_DIR/../../agentgateway" "$ROOT_DIR/../agentgateway")"
 
+ensure_agentgateway_bin() {
+  if [ -n "$AGW_BIN" ]; then
+    return 0
+  fi
+
+  AGW_BIN="$AGW_CARGO_TARGET_DIR/quick-release/agentgateway"
+  if [ -x "$AGW_BIN" ]; then
+    return 0
+  fi
+
+  (
+    cd "$AGENTGATEWAY_DIR"
+    CARGO_TARGET_DIR="$AGW_CARGO_TARGET_DIR" cargo build --profile quick-release -p agentgateway-app
+  )
+}
+
 cleanup() {
   if [ -n "$AGW_PID" ] && kill -0 "$AGW_PID" >/dev/null 2>&1; then
     kill -INT "$AGW_PID" >/dev/null 2>&1 || true
@@ -83,6 +101,8 @@ if ! command -v cargo >/dev/null 2>&1; then
   echo "cargo not found in PATH"
   exit 1
 fi
+
+ensure_agentgateway_bin
 
 if [ -z "$GO_BIN" ]; then
   GO_BIN="$(command -v go 2>/dev/null || true)"
@@ -127,8 +147,7 @@ if ! lsof -nP -iTCP:"$MOCK_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 (
-  cd "$AGENTGATEWAY_DIR"
-  CARGO_TARGET_DIR=/tmp/agentgateway-target cargo run -p agentgateway-app -- -f "$AGW_CONFIG"
+  "$AGW_BIN" -f "$AGW_CONFIG"
 ) >"$AGW_LOG" 2>&1 &
 AGW_PID=$!
 disown "$AGW_PID" >/dev/null 2>&1 || true
