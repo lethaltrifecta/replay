@@ -49,6 +49,12 @@ build/
 artifacts/
 /cmdr
 /.worktrees/
+ui/node_modules/
+ui/.pnpm-store/
+ui/.next/
+ui/playwright-report/
+ui/test-results/
+ui/tsconfig.tsbuildinfo
 
 # Review artifacts
 tmp_review/
