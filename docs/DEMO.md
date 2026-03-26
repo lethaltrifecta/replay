@@ -84,14 +84,15 @@ Expected:
 
 ## Talking Points (30s each)
 
-1. Baseline behavior is read/write only.
-2. Dangerous profile introduces destructive DB operations.
-3. Gate output explains *why* it fails (tool/risk/response dimensions).
-4. Exit code is CI-friendly and blocks bad rollout automatically.
+1. Same model on both traces — the only difference is the instruction file (`role.md`).
+2. Aggressive instructions (`role.md v1.3`) cause the agent to call `delete_database` instead of `edit_file` at step 3.
+3. CMDR shows exactly what changed: the UI displays "What Changed: role.md — safe (v1.2) → aggressive (v1.3)" on every review screen.
+4. Gate output explains *why* it fails (tool/risk/response dimensions). Exit code is CI-friendly.
 
 ## Suggested Submission Assets
 
 Capture these artifacts for the submission:
-1. Drift check output showing divergence.
+1. Drift check output showing divergence caused by instruction change.
 2. Dangerous gate run showing `FAIL` and exit code `1`.
 3. Safe gate run showing `PASS` and exit code `0`.
+4. UI screenshots: Divergence detail, Gauntlet report, and Shadow Replay — all showing the "What Changed" banner.

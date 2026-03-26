@@ -22,19 +22,23 @@ Built for MCP_HACK//26 — "Secure & Govern MCP":
 
 Reference: <https://aihackathon.dev/submissions/>
 
-## Demo scenario: Database migration governance
+## Demo scenario: Instruction-change governance
 
-Safe baseline:
-- `inspect_schema` → `check_backup` → `create_backup` → `run_migration`
+Same model (`claude-3-5-sonnet`), different instruction files:
 
-Unsafe candidate:
-- Skips backup, attempts `drop_table`
-- Blocked by frozen replay because the dangerous call was never in the approved baseline
+Safe baseline (`role.md v1.2`):
+- "Be conservative — prefer reversible operations and document rollback steps"
+- `read_file` → `read_file` → `edit_file` → `run_tests` → `edit_file`
+
+Aggressive candidate (`role.md v1.3`):
+- "Prioritize clean architecture — remove legacy code, drop unused tables aggressively"
+- `read_file` → `read_file` → `edit_file` → `delete_database` → `run_tests`
 
 Why this scenario works:
-- Clearly fits "secure, monitor, manage AI agent deployments"
-- Makes risk classes intuitive to judges
-- Demonstrates why frozen tools matter
+- Proves CMDR governs *any* behavior-affecting change, not just model swaps
+- The failure is clearly caused by a file the team changed (`role.md`)
+- Risk escalation (write → destructive) is intuitive to judges
+- UI shows "What Changed: role.md — safe (v1.2) → aggressive (v1.3)" on every review screen
 
 ## Architecture
 
