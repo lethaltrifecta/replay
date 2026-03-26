@@ -20,6 +20,7 @@ import {
 
 import type {
   ApprovalState,
+  ChangeContext,
   CompareViewModel,
   ComparisonSummary,
   DriftInboxItem,
@@ -36,6 +37,7 @@ import type {
 
 export type {
   ApprovalState,
+  ChangeContext,
   CompareViewModel,
   ComparisonSummary,
   DriftInboxItem,
@@ -289,7 +291,19 @@ function buildCompareViewModel(
     comparison,
     summary: summarizeComparison(comparison),
     steps: pairSteps(comparison),
+    changeContext: extractChangeContext(comparison),
   };
+}
+
+function extractChangeContext(comparison: TraceComparison): ChangeContext | undefined {
+  const allSteps = [...(comparison.baseline?.steps ?? []), ...(comparison.candidate?.steps ?? [])];
+  for (const step of allSteps) {
+    const ctx = step.metadata?.["change_context"];
+    if (ctx && typeof ctx === "object" && "kind" in ctx && "target" in ctx) {
+      return ctx as ChangeContext;
+    }
+  }
+  return undefined;
 }
 
 function summarizeComparison(comparison: TraceComparison): ComparisonSummary {

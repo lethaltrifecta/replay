@@ -9,6 +9,7 @@ import { approveTraceAsBaseline, formatApiError, getDriftReview } from "@/lib/go
 import {
   Badge,
   Button,
+  ChangeContextBanner,
   DefinitionList,
   EmptyState,
   ErrorState,
@@ -136,6 +137,8 @@ export function DriftDetailScreen({
       {error ? <div className="mb-4"><ErrorState message={error} /></div> : null}
 
       <div className="section-grid">
+        <ChangeContextBanner ctx={review.compare?.changeContext} />
+
         <Panel
           title="Divergence review"
           description="Tabbed review surface using the same primitives as the sibling apps."

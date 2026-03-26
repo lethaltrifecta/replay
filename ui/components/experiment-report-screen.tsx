@@ -10,6 +10,7 @@ import { approveTraceAsBaseline, formatApiError, getExperimentReview } from "@/l
 import {
   Badge,
   Button,
+  ChangeContextBanner,
   DefinitionList,
   ErrorState,
   formatScore,
@@ -134,6 +135,8 @@ export function ExperimentReportScreen({ experimentId }: { experimentId: string 
       {error ? <div className="mb-4"><ErrorState message={error} /></div> : null}
 
       <div className="section-grid">
+        <ChangeContextBanner ctx={review.compare?.changeContext} />
+
           <Panel
             title="Operator answers"
             description="This is the contract validator. The report should answer all four questions without making the reviewer dig through raw storage shapes."
@@ -144,6 +147,7 @@ export function ExperimentReportScreen({ experimentId }: { experimentId: string 
               {
                 label: "What changed?",
                 value:
+                  review.compare?.changeContext?.summary ??
                   review.analysis?.behaviorDiff?.reason ??
                   review.compare?.summary.divergenceReason ??
                   "No structured behavior explanation captured.",

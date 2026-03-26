@@ -315,15 +315,18 @@ type TraceDetail struct {
 
 // TraceStep defines model for TraceStep.
 type TraceStep struct {
-	Completion       *string        `json:"completion,omitempty"`
-	CompletionTokens *int           `json:"completionTokens,omitempty"`
-	LatencyMs        *int           `json:"latencyMs,omitempty"`
-	Model            *string        `json:"model,omitempty"`
-	Prompt           *PromptContent `json:"prompt,omitempty"`
-	PromptTokens     *int           `json:"promptTokens,omitempty"`
-	Provider         *string        `json:"provider,omitempty"`
-	SpanId           *string        `json:"spanId,omitempty"`
-	StepIndex        *int           `json:"stepIndex,omitempty"`
+	Completion       *string `json:"completion,omitempty"`
+	CompletionTokens *int    `json:"completionTokens,omitempty"`
+	LatencyMs        *int    `json:"latencyMs,omitempty"`
+
+	// Metadata Arbitrary per-step metadata (e.g. change_context).
+	Metadata     *map[string]interface{} `json:"metadata,omitempty"`
+	Model        *string                 `json:"model,omitempty"`
+	Prompt       *PromptContent          `json:"prompt,omitempty"`
+	PromptTokens *int                    `json:"promptTokens,omitempty"`
+	Provider     *string                 `json:"provider,omitempty"`
+	SpanId       *string                 `json:"spanId,omitempty"`
+	StepIndex    *int                    `json:"stepIndex,omitempty"`
 }
 
 // TraceSummary defines model for TraceSummary.

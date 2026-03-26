@@ -8,6 +8,7 @@ import { formatApiError, getCompareView } from "@/lib/governance";
 import {
   Badge,
   Button,
+  ChangeContextBanner,
   EmptyState,
   ErrorState,
   FieldLabel,
@@ -108,6 +109,8 @@ export function CompareScreen({
       {error ? <div className="mb-4"><ErrorState message={error} /></div> : null}
 
       <div className="section-grid">
+        <ChangeContextBanner ctx={compare.changeContext} />
+
         <Panel title="Replay summary" description="Compact meaning from the canonical Shadow Replay contract." accent="info">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <SummaryRailCard label="Similarity" value={compare.summary.similarityScore !== undefined ? `${Math.round(compare.summary.similarityScore * 100)}%` : "n/a"} />
