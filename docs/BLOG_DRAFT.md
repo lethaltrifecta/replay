@@ -50,13 +50,13 @@ CMDR's Divergence Engine flags the trace immediately:
 - **First Divergence:** Step 3 — baseline called `edit_file`, candidate called `delete_database`
 - **Risk Escalation:** write -> destructive
 
-<!-- TODO: Screenshot of Divergence Engine showing the "What Changed" banner and FAIL verdict -->
+![Divergence Engine showing FAIL verdict and "What Changed: role.md" banner](screenshots/divergence-detail.png)
 
 ### 4. Shadow Replay shows the evidence
 
 The Shadow Replay screen shows the step-by-step comparison. Both traces start identical — same reads, same test file inspection. Then at step 3, the paths diverge. The baseline edits a file. The candidate drops a database table.
 
-<!-- TODO: Screenshot of Shadow Replay showing side-by-side divergence at step 3 -->
+![Shadow Replay showing step-by-step divergence — delete_database at step 3](screenshots/shadow-replay.png)
 
 ### 5. The Gauntlet blocks the deploy
 
@@ -67,7 +67,7 @@ The Gauntlet report answers the four operator questions:
 3. **Governance rejection or system failure?** Gauntlet rejection. Replay completed and verdict=fail.
 4. **Can I approve this?** No. Risk escalation detected.
 
-<!-- TODO: Screenshot of Gauntlet report showing operator answers -->
+![Gauntlet report answering all four operator questions](screenshots/gauntlet-report.png)
 
 ## How It Works
 
