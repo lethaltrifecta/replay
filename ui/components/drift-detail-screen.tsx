@@ -137,7 +137,7 @@ export function DriftDetailScreen({
       {error ? <div className="mb-4"><ErrorState message={error} /></div> : null}
 
       <div className="section-grid">
-        <ChangeContextBanner ctx={review.compare.changeContext} />
+        <ChangeContextBanner ctx={review.compare?.changeContext} />
 
         <Panel
           title="Divergence review"

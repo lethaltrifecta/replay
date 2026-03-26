@@ -347,12 +347,12 @@ export function ChangeContextBanner({ ctx }: { ctx?: ChangeContext }) {
   if (!ctx) return null;
   return (
     <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
-      <p className="m-0 text-[11px] uppercase tracking-[0.24em] text-primary/70">What changed</p>
+      <FieldLabel>What changed</FieldLabel>
       <p className="mt-2 text-sm font-semibold text-foreground">
         {ctx.target}
-        {ctx.baselineLabel && ctx.candidateLabel ? (
+        {ctx.baseline_label && ctx.candidate_label ? (
           <span className="ml-2 font-normal text-muted-foreground">
-            {ctx.baselineLabel} → {ctx.candidateLabel}
+            {ctx.baseline_label} → {ctx.candidate_label}
           </span>
         ) : null}
       </p>

@@ -15,8 +15,8 @@ export type RiskClass = "read" | "write" | "destructive" | "unknown";
 export type ChangeContext = {
   kind: string;
   target: string;
-  baselineLabel?: string;
-  candidateLabel?: string;
+  baseline_label?: string;
+  candidate_label?: string;
   summary?: string;
 };
 export type ExperimentOutcome = "approved" | "rejected" | "system_failure" | "running";
