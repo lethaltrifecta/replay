@@ -1,243 +1,174 @@
 # CMDR: Agent Behavior Governance
 
-CMDR (Comparative Model Deterministic Replay) is a governance layer for MCP-enabled LLM agents.
-It captures behavior from OpenTelemetry traces, stores replay and tool evidence in PostgreSQL, compares runs against approved baselines, and blocks unsafe model or prompt changes with deterministic replay.
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=next.js&logoColor=white)](https://nextjs.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![MCP_HACK//26](https://img.shields.io/badge/MCP__HACK%2F%2F26-Secure_%26_Govern-blueviolet)](https://aihackathon.dev/)
 
-> Status: hackathon-ready and demoable today. The strongest end-to-end path is the migration demo and replay workflow; the project is not yet hardened as a multi-tenant production service.
+**Same model. Same tools. Different instructions. CMDR caught it.**
 
-Built for [MCP_HACK//26](https://aihackathon.dev/) in the `Secure & Govern MCP` track.
+CMDR is a governance system for MCP-enabled AI agents. It captures agent runs via OpenTelemetry, detects behavioral drift against approved baselines, and gates deployments by replaying scenarios with frozen tool responses.
 
-## Why CMDR
+> Built for [MCP_HACK//26](https://aihackathon.dev/) in the **Secure & Govern MCP** track using [agentgateway](https://github.com/solo-io/agentgateway) and [freeze-mcp](https://github.com/lethaltrifecta/freeze-mcp).
 
-Agent teams need answers to two operational questions:
+---
 
-1. Did our agent's behavior drift from the last known-good state?
-2. If we change the model, prompt, or policy, is it still safe to deploy?
+## The Problem
 
-CMDR answers both:
+Teams change prompts, role files, and tool configurations far more often than they change foundation models. These changes are invisible to model evaluation tools — the agent uses the same model, same API keys, but its behavior changes silently. CMDR governs **any change that alters agent behavior**: model swaps, prompt changes, instruction files, and tool configuration.
 
-- **Drift detection** compares live traces against approved baselines
-- **Replay-based gates** rerun baseline scenarios with a candidate configuration
-- **Frozen MCP replay** isolates model behavior from live tool-side noise
-- **CI-friendly verdicts** return `exit 0` for pass and `exit 1` for fail
+## See It In Action
 
-## What You Can Run Right Away
+Someone updates `role.md` from conservative to aggressive instructions. Same model, same tools — only the instructions changed. CMDR catches the behavioral divergence:
 
-- Ingest OTLP traces over gRPC or HTTP
-- Store normalized replay steps and tool captures in PostgreSQL
-- Compare a candidate trace against a baseline with `cmdr drift check`
-- Run `cmdr gate check` for replay-based pass/fail verdicts
-- Run a deterministic demo with no external LLM dependency
-- Run a full migration scenario that produces judge-friendly artifacts
+![Shadow Replay showing step-by-step divergence at step 3](docs/screenshots/shadow-replay.png)
 
-## Quick Paths
+<details>
+<summary><strong>More screenshots</strong></summary>
 
-- Want the fastest local setup: [docs/QUICKSTART.md](docs/QUICKSTART.md)
-- Want the 2-3 minute deterministic demo: [docs/DEMO.md](docs/DEMO.md)
-- Want the full gateway-driven migration demo: [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md)
-- Want the architecture overview: [docs/README.md](docs/README.md)
-- Want the hackathon framing: [docs/SUBMISSION_NOTES.md](docs/SUBMISSION_NOTES.md)
+**Divergence Engine** — Verdict-first review with "What Changed" context:
+![Divergence detail](docs/screenshots/divergence-detail.png)
 
-## Architecture
+**The Gauntlet** — Answers all four operator questions:
+![Gauntlet report](docs/screenshots/gauntlet-report.png)
 
-```text
-agentgateway (or any OTLP emitter)
-        |
-        | OTLP (gRPC/HTTP)
-        v
-+--------------------------------+
-| CMDR service (`cmdr serve`)    |
-| - OTLP receiver                |
-| - parser (`gen_ai.*`)          |
-| - pair-based drift + gate logic|
-+--------------------------------+
-        |
-        v
-+--------------------------------+       +-------------------------------+
-| PostgreSQL                     |       | agentgateway                  |
-| - otel_traces                  |       | (LLM + MCP proxy)             |
-| - replay_traces                |       +-------------------------------+
-| - tool_captures                |                   ^
-| - baselines / drift_results    |                   |
-| - experiments / runs           |       cmdr gate check (replay prompts
-| - analysis_results             |        with variant model config)
-+--------------------------------+
+</details>
 
-freeze-mcp (separate repo/service)
-reads `tool_captures` for deterministic tool replay.
-```
+## Key Features
+
+| Feature | What it does |
+|---------|-------------|
+| **Drift Detection** | Compares live agent traces against approved baselines using behavioral fingerprinting |
+| **Deployment Gates** | Replays baseline scenarios with different configs; blocks deploys that diverge |
+| **Deterministic Replay** | [freeze-mcp](https://github.com/lethaltrifecta/freeze-mcp) serves frozen tool responses so the only variable is the agent's behavior |
+| **Change Context Tracking** | Tags runs with what changed (instruction file, model, config) and surfaces it in the UI |
+| **Mission Control UI** | Four review surfaces: Launchpad, Divergence Engine, Shadow Replay, The Gauntlet |
+| **CI-Friendly** | `exit 0` for pass, `exit 1` for fail — drop into any pipeline |
 
 ## Quick Start
 
 ```bash
-# 1) one-time local setup
+# Start services and run the demo
 make setup-dev
+make dev-up
+make build
+./bin/cmdr demo seed
+./bin/cmdr serve &
 
-# 2) configure environment
-cp .env.example .env
-
-# 3) run CMDR
-make run
+# Start the UI (requires REPLAY_API_ORIGIN for API proxy)
+cd ui && REPLAY_API_ORIGIN=http://localhost:8080 npx next dev
+# Open http://localhost:3000
 ```
 
-Health check:
+Or run the CLI-only demo:
 
 ```bash
-curl -i http://localhost:4318/health
+make demo    # seeds data + runs drift check + gate checks
 ```
 
-CMDR starts OTLP listeners on:
+## Architecture
 
-- `CMDR_OTLP_GRPC_ENDPOINT` (default `0.0.0.0:4317`)
-- `CMDR_OTLP_HTTP_ENDPOINT` (default `0.0.0.0:4318`)
-
-For the full local setup, validation steps, and sample OTLP payloads, use [docs/QUICKSTART.md](docs/QUICKSTART.md).
+```text
+agentgateway (OTLP emitter)
+        |
+        | OTLP (gRPC / HTTP)
+        v
++----------------------------------+
+|  CMDR                            |
+|  - OTLP receiver & span parser  |
+|  - Behavioral fingerprinting    |
+|  - Replay engine                |
+|  - HTTP API + Mission Control UI |
++----------------------------------+
+        |                    |
+        v                    v
+  PostgreSQL          agentgateway
+  (12 tables)       (replay via LLM proxy)
+                         |
+                         v
+                    freeze-mcp
+                 (frozen tool responses)
+```
 
 ## Core Workflows
 
 ### Drift Detection
 
-Compare a candidate trace against an explicit baseline:
-
 ```bash
 cmdr drift check <baseline-trace-id> <candidate-trace-id>
-cmdr drift list --limit 20
-cmdr drift list --baseline <baseline-trace-id> --limit 20
 ```
 
-Each drift result stores:
-
-- a composite drift score (`0.0` to `1.0`)
-- a verdict (`pass`, `warn`, or `fail`)
-- a typed breakdown of the contributing dimensions
-
-Current scope notes:
-
-- Drift is pair-based on this branch. A result is always `candidate` compared against `baseline`.
-- Baselines are currently created through the HTTP API or the seeded demo flow, not a dedicated CLI command.
+Compares tool call patterns, risk distributions, token usage, and response content. Returns a composite drift score (0.0-1.0) with a `pass`/`warn`/`fail` verdict.
 
 ### Deployment Gates
 
-Replay a captured baseline trace with a different model and verify whether the behavior stays within the threshold:
-
 ```bash
 cmdr gate check --baseline <trace-id> --model gpt-4o --threshold 0.8
-cmdr gate report <experiment-id>
 ```
 
-`cmdr gate check`:
+Replays baseline prompts through agentgateway with a candidate config, compares the result, and exits `0` (pass) or `1` (fail).
 
-1. loads the baseline replay steps
-2. replays the prompts through agentgateway
-3. stores the variant run as a new experiment
-4. compares structure, response behavior, and tool behavior when available
-5. exits `0` on pass and `1` on fail
+### Governance UI
 
-When `MCPURL` is configured, the replay path can execute a multi-turn tool loop against `freeze-mcp`; otherwise it falls back to prompt-only replay.
+Four review surfaces at `http://localhost:3000`:
 
-### Demos
+- **Launchpad** (`/launchpad`) — Browse traces, approve baselines, launch comparisons
+- **Divergence Engine** (`/divergence`) — Verdict-first triage queue (FAIL / WARN / PASS / PENDING)
+- **Shadow Replay** (`/shadow-replay`) — Raw side-by-side step evidence without verdicts
+- **The Gauntlet** (`/gauntlet`) — Canonical trial reports answering four operator questions
 
-Deterministic demo:
+## Tech Stack
 
-```bash
-make dev-up
-make demo
-```
-
-Manual deterministic demo:
-
-```bash
-cmdr demo seed
-cmdr drift check demo-baseline-001 demo-drifted-002
-cmdr demo gate --baseline demo-baseline-001 --model gpt-4o-danger
-cmdr demo gate --baseline demo-baseline-001 --model claude-3-5-sonnet
-```
-
-Full migration demo with saved artifacts:
-
-```bash
-cmdr demo migration run
-cmdr demo migration latest
-```
-
-The migration demo writes a self-contained artifact bundle with logs, a structured report, a markdown report, a judge highlight, and a demo script.
-
-## Project Status
-
-CMDR is in a good shape for demos, evaluation, and iteration. It is intentionally narrower than a fully productized governance platform.
-
-- The best end-to-end proof is the migration demo in [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md).
-- The replay system supports both prompt-only and MCP-backed agent-loop execution.
-- The full frozen replay path depends on companion services such as `agentgateway` and `freeze-mcp`.
-- Production hardening areas still outside current scope include authentication, multi-tenancy, secret management, and deployment packaging.
+| Component | Technology |
+|-----------|-----------|
+| Backend | Go 1.26, PostgreSQL 15, OpenTelemetry |
+| CLI | spf13/cobra |
+| API | OpenAPI 3.0, oapi-codegen |
+| Frontend | Next.js 16, React 19, TypeScript, Radix UI, Tailwind CSS |
+| Telemetry | OTLP gRPC + HTTP receivers |
+| Container | Multi-stage Docker build with distroless runtime |
+| CI | GitHub Actions (test, lint, build) |
 
 ## Development
 
 ```bash
-make dev-up
-make run
-make dev-down
-make dev-reset
-
-make test
-make test-storage
-make lint
-make fmt
+make dev-up       # Start PostgreSQL + Jaeger
+make build        # Build binary
+make test         # Unit tests (no DB required)
+make test-storage # Integration tests (requires PostgreSQL)
+make lint         # golangci-lint
 ```
-
-Testing notes:
-
-- Pure unit packages (`pkg/config`, `pkg/drift`, `pkg/otelreceiver`, `pkg/agwclient`, `pkg/diff`, `pkg/replay`) run without PostgreSQL.
-- Storage tests (`pkg/storage`) require a reachable PostgreSQL instance at `CMDR_POSTGRES_URL`.
-- End-to-end freeze and replay tests are opt-in and require companion services.
-- The full migration demo harness is available via `cmdr demo migration run` or `make test-migration-demo-full-loop`.
 
 ## Project Layout
 
 ```text
-cmd/cmdr/
-  commands/              # CLI entrypoints for serve, drift, gate, and demo flows
-
-pkg/
-  api/                   # HTTP API server, handlers, generated OpenAPI surface
-  agwclient/             # agentgateway HTTP client
-  config/                # env-based config loading and validation
-  diff/                  # structural and semantic comparison engine
-  drift/                 # behavioral fingerprint extraction and scoring
-  otelreceiver/          # OTLP receiver and span parsing
-  replay/                # replay engine, agent loop, MCP tool executor
-  storage/               # PostgreSQL models, queries, and migrations
-
-internal/                # focused internal helpers for demo and replay flows
-scripts/                 # setup scripts, demo harnesses, local utilities
-test/                    # integration and e2e suites
-docs/                    # setup, architecture, demo, and submission docs
-ui/                      # generated API package and UI work in progress
+cmd/cmdr/commands/    CLI: serve, drift, gate, demo
+pkg/api/              HTTP API server + OpenAPI handlers
+pkg/drift/            Behavioral fingerprinting + scoring
+pkg/replay/           Prompt replay + agent loop engine
+pkg/diff/             Structural + semantic comparison
+pkg/otelreceiver/     OTLP gRPC/HTTP receiver + parser
+pkg/storage/          PostgreSQL models, queries, migrations
+ui/                   Mission Control UI (Next.js 16 + React 19)
+docs/                 Architecture, demo runbooks, blog draft
 ```
 
 ## Documentation
 
-Start with [docs/README.md](docs/README.md) for a curated index.
+| Doc | Purpose |
+|-----|---------|
+| [QUICKSTART](docs/QUICKSTART.md) | Local setup and first commands |
+| [DEMO](docs/DEMO.md) | 2-3 minute deterministic demo |
+| [MIGRATION_DEMO](docs/MIGRATION_DEMO.md) | Full gateway-driven scenario |
+| [BLOG_DRAFT](docs/BLOG_DRAFT.md) | "Same Model, Different Instructions, CMDR Caught It" |
+| [Architecture index](docs/README.md) | Full documentation guide |
+| [SUBMISSION_NOTES](docs/SUBMISSION_NOTES.md) | Hackathon framing and scoring alignment |
 
-- [docs/QUICKSTART.md](docs/QUICKSTART.md) — local setup and first commands
-- [docs/LOCAL_DEV_SETUP.md](docs/LOCAL_DEV_SETUP.md) — development environment details
-- [docs/DEMO.md](docs/DEMO.md) — deterministic demo runbook
-- [docs/MIGRATION_DEMO.md](docs/MIGRATION_DEMO.md) — full gateway-driven migration scenario
-- [docs/GATE_REPLAY_ARCHITECTURE.md](docs/GATE_REPLAY_ARCHITECTURE.md) — replay and gate design
-- [docs/AGENTGATEWAY_CAPTURE.md](docs/AGENTGATEWAY_CAPTURE.md) — agentgateway capture details
-- [docs/FREEZE_AGENT_LOOP.md](docs/FREEZE_AGENT_LOOP.md) — frozen MCP loop proof
-- [docs/DATABASE_LAYER.md](docs/DATABASE_LAYER.md) — schema overview
-- [docs/E2E_DEMO_PLAN.md](docs/E2E_DEMO_PLAN.md) — end-to-end hackathon alignment
-- [docs/OTLP_RECEIVER.md](docs/OTLP_RECEIVER.md) — OTLP receiver details
-- [docs/SUBMISSION_NOTES.md](docs/SUBMISSION_NOTES.md) — hackathon framing and submission copy
+## Open Source Integrations
 
-## Contributing
-
-Contribution guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Security
-
-Security reporting and scope notes live in [SECURITY.md](SECURITY.md).
+- **[agentgateway](https://github.com/solo-io/agentgateway)** — LLM + MCP proxy that emits OTEL traces. CMDR ingests these for capture and uses agentgateway as the replay client.
+- **[freeze-mcp](https://github.com/lethaltrifecta/freeze-mcp)** — MCP server that serves frozen tool responses from CMDR's `tool_captures` table. Enables deterministic replay.
 
 ## License
 
