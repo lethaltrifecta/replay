@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lethaltrifecta/replay/pkg/otelreceiver"
 	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
@@ -66,12 +67,16 @@ func TestDemoTraces_DifferentPromptsSameModel(t *testing.T) {
 }
 
 func TestDemoArgsHash_MatchesProduction(t *testing.T) {
-	args := storage.JSONB{"path": "src/auth/module.ts"}
+	args := storage.JSONB{
+		"path":    "src/auth/module.ts",
+		"retries": 3,
+		"limits":  storage.JSONB{"timeout_ms": 1500},
+	}
 
-	// demoArgsHash now delegates to production — call it twice to verify determinism.
-	hash1 := demoArgsHash(args)
-	hash2 := demoArgsHash(args)
+	// Compare against the production helper to lock the demo onto the same normalization path.
+	expected := otelreceiver.CalculateCaptureArgsHash(args)
+	actual := demoArgsHash(args)
 
-	assert.NotEmpty(t, hash1)
-	assert.Equal(t, hash1, hash2, "args hash must be deterministic")
+	assert.NotEmpty(t, actual)
+	assert.Equal(t, expected, actual, "demo args hash must match production capture hashing")
 }
