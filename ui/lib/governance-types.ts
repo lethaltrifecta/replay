@@ -11,6 +11,14 @@ import type {
 } from "@/lib/api";
 
 export type RiskClass = "read" | "write" | "destructive" | "unknown";
+
+export type ChangeContext = {
+  kind: string;
+  target: string;
+  baselineLabel?: string;
+  candidateLabel?: string;
+  summary?: string;
+};
 export type ExperimentOutcome = "approved" | "rejected" | "system_failure" | "running";
 
 export type TraceRecord = {
@@ -78,6 +86,7 @@ export type CompareViewModel = {
   comparison: TraceComparison;
   summary: ComparisonSummary;
   steps: StepPair[];
+  changeContext?: ChangeContext;
 };
 
 export type ApprovalState = {

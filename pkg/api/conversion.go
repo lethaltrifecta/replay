@@ -283,7 +283,7 @@ func (s *Server) buildTraceDetail(w http.ResponseWriter, ctx context.Context, tr
 			return nil, false
 		}
 
-		oapiSteps = append(oapiSteps, TraceStep{
+		step := TraceStep{
 			SpanId:           &span.SpanID,
 			StepIndex:        &idx,
 			Provider:         &span.Provider,
@@ -293,7 +293,12 @@ func (s *Server) buildTraceDetail(w http.ResponseWriter, ctx context.Context, tr
 			PromptTokens:     &pt,
 			CompletionTokens: &ct,
 			LatencyMs:        &lms,
-		})
+		}
+		if len(span.Metadata) > 0 {
+			md := map[string]interface{}(span.Metadata)
+			step.Metadata = &md
+		}
+		oapiSteps = append(oapiSteps, step)
 	}
 
 	captures, err := s.store.GetToolCapturesByTrace(ctx, traceID)

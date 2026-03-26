@@ -177,6 +177,12 @@ export type TraceStep = {
     promptTokens?: number;
     completionTokens?: number;
     latencyMs?: number;
+    /**
+     * Arbitrary per-step metadata (e.g. change_context).
+     */
+    metadata?: {
+        [key: string]: unknown;
+    };
 };
 
 export type TraceDetail = {

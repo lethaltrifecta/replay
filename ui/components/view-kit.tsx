@@ -3,6 +3,7 @@
 import { clsx } from "clsx";
 import type { PropsWithChildren, ReactNode } from "react";
 
+import type { ChangeContext } from "@/lib/governance-types";
 import { Badge as UIBadge } from "@/components/ui/badge";
 import { Button as UIButton } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -340,4 +341,22 @@ export function riskTone(risk?: string): "neutral" | "warning" | "danger" {
     default:
       return "neutral";
   }
+}
+
+export function ChangeContextBanner({ ctx }: { ctx?: ChangeContext }) {
+  if (!ctx) return null;
+  return (
+    <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+      <p className="m-0 text-[11px] uppercase tracking-[0.24em] text-primary/70">What changed</p>
+      <p className="mt-2 text-sm font-semibold text-foreground">
+        {ctx.target}
+        {ctx.baselineLabel && ctx.candidateLabel ? (
+          <span className="ml-2 font-normal text-muted-foreground">
+            {ctx.baselineLabel} → {ctx.candidateLabel}
+          </span>
+        ) : null}
+      </p>
+      {ctx.summary ? <p className="mt-1 text-sm leading-6 text-muted-foreground">{ctx.summary}</p> : null}
+    </div>
+  );
 }

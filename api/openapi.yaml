@@ -734,6 +734,10 @@ components:
           type: integer
         latencyMs:
           type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Arbitrary per-step metadata (e.g. change_context).
 
     TraceDetail:
       type: object
