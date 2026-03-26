@@ -28,6 +28,7 @@ This directory is organized around a few distinct audiences: someone trying to r
 - [GOVERNANCE_V1_PLAN.md](GOVERNANCE_V1_PLAN.md) — product direction
 - [GOVERNANCE_V1_CHECKLIST.md](GOVERNANCE_V1_CHECKLIST.md) — decision filter for the API surface
 - [GOVERNANCE_V1_CONTRACT.md](GOVERNANCE_V1_CONTRACT.md) — contract notes
+- [HACKATHON_INSTRUCTION_CHANGE_PLAN.md](HACKATHON_INSTRUCTION_CHANGE_PLAN.md) — smallest shippable plan for the "same model, different instructions" story
 - [REPLAY_UI_FINDINGS_AND_PLAN.md](REPLAY_UI_FINDINGS_AND_PLAN.md) — UI direction and constraints
 
 ## Suggested Reading Order
