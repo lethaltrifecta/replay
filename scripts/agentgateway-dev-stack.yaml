@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://agentgateway.dev/schema/config
 #
 # agentgateway config for docker-compose dev stack.
-# LLM proxy on :3001, MCP proxy on :3003.
+# LLM proxy on :4000 (via llm.models), MCP proxy on :3003.
 # All hostnames use docker-compose service names.
 
 config:
@@ -9,26 +9,14 @@ config:
     otlpEndpoint: http://cmdr:4317
     randomSampling: true
 
+llm:
+  models:
+  - name: "*"
+    provider: openAI
+    params:
+      apiKey: "$OPENAI_API_KEY"
+
 binds:
-- port: 3001
-  listeners:
-  - name: llm
-    protocol: HTTP
-    routes:
-    - name: llm
-      backends:
-      - ai:
-          name: mock-openai
-          hostOverride: mock-llm:18080
-          pathOverride: /v1/chat/completions
-          provider:
-            openAI:
-              model: mock-model
-          policies:
-            ai:
-              routes:
-                /v1/chat/completions: completions
-                "*": passthrough
 - port: 3003
   listeners:
   - name: mcp

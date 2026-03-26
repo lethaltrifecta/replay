@@ -65,7 +65,7 @@ services:
       CMDR_API_PORT: "8080"
       CMDR_LOG_LEVEL: debug
       CMDR_POSTGRES_URL: postgres://cmdr:cmdr_dev_password@postgres:5432/cmdr?sslmode=disable
-      CMDR_AGENTGATEWAY_URL: http://agentgateway:3001
+      CMDR_AGENTGATEWAY_URL: http://agentgateway:4000
       CMDR_MCP_URL: http://freeze-mcp:9090/mcp
       CMDR_AGENT_LOOP_MAX_TURNS: "8"
       CMDR_OTLP_GRPC_ENDPOINT: 0.0.0.0:4317
@@ -109,16 +109,15 @@ services:
   # --- agentgateway (LLM + MCP proxy) ---
 
   agentgateway:
-    image: ghcr.io/agentgateway/agentgateway:latest
+    image: ghcr.io/agentgateway/agentgateway:v1.0.0-alpha.2
     container_name: cmdr-dev-agentgateway
-    depends_on:
-      mock-llm:
-        condition: service_started
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
     volumes:
       - ./scripts/agentgateway-dev-stack.yaml:/etc/agentgateway/config.yaml:ro
     command: ["-f", "/etc/agentgateway/config.yaml"]
     ports:
-      - "3001:3001"    # LLM proxy
+      - "4000:4000"    # LLM proxy (llm.models)
       - "3003:3003"    # MCP proxy (for freeze-mcp)
 
   # --- freeze-mcp (frozen tool responses) ---
