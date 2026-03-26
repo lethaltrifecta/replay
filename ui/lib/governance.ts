@@ -296,8 +296,8 @@ function buildCompareViewModel(
 }
 
 function extractChangeContext(comparison: TraceComparison): ChangeContext | undefined {
-  const steps = comparison.baseline?.steps ?? comparison.candidate?.steps ?? [];
-  for (const step of steps) {
+  const allSteps = [...(comparison.baseline?.steps ?? []), ...(comparison.candidate?.steps ?? [])];
+  for (const step of allSteps) {
     const ctx = step.metadata?.["change_context"];
     if (ctx && typeof ctx === "object" && "kind" in ctx && "target" in ctx) {
       return ctx as ChangeContext;
