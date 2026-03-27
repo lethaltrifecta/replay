@@ -14,6 +14,7 @@ This directory is organized around a few distinct audiences: someone trying to r
 - [MIGRATION_DEMO.md](MIGRATION_DEMO.md) — full gateway-driven migration scenario
 - [E2E_DEMO_PLAN.md](E2E_DEMO_PLAN.md) — how the demo maps to hackathon scoring
 - [SUBMISSION_NOTES.md](SUBMISSION_NOTES.md) — hackathon framing, pitch, and judging alignment
+- [BLOG_DRAFT.md](BLOG_DRAFT.md) — "Same Model, Different Instructions, CMDR Caught It" blog post draft
 
 ## Architecture And Data Flow
 

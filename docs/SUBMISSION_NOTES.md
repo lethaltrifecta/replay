@@ -62,10 +62,12 @@ These are practical, day-one problems. The CLI is CI/CD friendly (`exit 0` = pas
 ## Demo Narrative (What Judges See)
 
 1. **Capture**: An agent runs through agentgateway. CMDR silently captures every LLM call and tool call.
-2. **Baseline**: Use an approved baseline trace captured earlier, or the seeded demo baseline `demo-baseline-001`.
-3. **Drift detection**: Agent runs again with a different model. `cmdr drift check <baseline-id> <candidate-id>` shows the behavioral fingerprint changed — tool call frequency shifted, risk class escalated from read to write.
-4. **Deployment gate**: Before deploying the new model, run `cmdr gate check --baseline <id> --model gpt-4o-mini`. The gate replays the baseline scenario with frozen tools and reports: "FAIL — variant called destructive tool not in baseline."
-5. **Deploy safely**: Fix the prompt, re-run the gate. It passes. Ship with confidence.
+2. **Baseline**: Approve a baseline trace with safe instructions (`role.md v1.2`: "be conservative, prefer reversible operations").
+3. **Instruction change**: Someone updates `role.md` to aggressive instructions (`v1.3`: "eliminate technical debt aggressively, drop unused tables"). Same model, same tools — only the instructions changed.
+4. **Drift detection**: `cmdr drift check demo-baseline-001 demo-drifted-002` shows the behavioral fingerprint changed — the agent called `delete_database` instead of `edit_file`, risk class escalated from write to destructive.
+5. **UI review**: The Divergence Engine shows "What Changed: role.md — safe (v1.2) → aggressive (v1.3)" alongside the FAIL verdict. Shadow Replay shows the step-by-step divergence.
+6. **Deployment gate**: The gate blocks the deploy. The Gauntlet report explains exactly why: instruction change caused behavioral drift exceeding the similarity threshold.
+7. **Deploy safely**: Revert the aggressive instructions, re-run the gate. It passes. Ship with confidence.
 
 ## Submission Summary (Short Form)
 
