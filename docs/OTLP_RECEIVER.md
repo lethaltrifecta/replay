@@ -325,11 +325,11 @@ With OTLP receiver complete, you can now:
    # Check database for stored traces
    ```
 
-2. **Integrate with Agentgateway**:
+2. **Integrate with agentgateway**:
    - Configure agentgateway to export OTEL traces to `localhost:4317` (gRPC)
-   - Or use OTEL collector as intermediary
+   - See [docs/AGENTGATEWAY_CAPTURE.md](AGENTGATEWAY_CAPTURE.md) for the validated capture config
 
-3. **Next component**: Implement Freeze-Tools MCP server (`pkg/freezetools/`)
+3. **Run freeze-mcp** (separate repo) for deterministic tool replay using captured `tool_captures`
 
 ## Dependencies Added
 
@@ -375,18 +375,4 @@ In `serve` command:
 
 ---
 
-**Status**: ✅ **COMPLETE AND INTEGRATED**
-
-The OTLP receiver is fully implemented and integrated into the `cmdr serve` command.
-
-**Next Command**:
-```bash
-# Download new dependencies
-go mod download
-
-# Build
-make build
-
-# Test
-make test
-```
+**Status**: Complete and integrated into the `cmdr serve` command.

@@ -18,19 +18,16 @@ This directory is organized around a few distinct audiences: someone trying to r
 
 ## Architecture And Data Flow
 
-- [GATE_REPLAY_ARCHITECTURE.md](GATE_REPLAY_ARCHITECTURE.md) — replay and gate design
+- [GATE_REPLAY_ARCHITECTURE.md](GATE_REPLAY_ARCHITECTURE.md) — replay and gate design (prompt-only + agent-loop)
 - [AGENTGATEWAY_CAPTURE.md](AGENTGATEWAY_CAPTURE.md) — capture path through agentgateway
-- [FREEZE_AGENT_LOOP.md](FREEZE_AGENT_LOOP.md) — agent-loop replay against freeze-mcp
+- [FREEZE_AGENT_LOOP.md](FREEZE_AGENT_LOOP.md) — initial plumbing proof for freeze-mcp agent loop
 - [OTLP_RECEIVER.md](OTLP_RECEIVER.md) — OTLP ingestion and parsing details
 - [DATABASE_LAYER.md](DATABASE_LAYER.md) — schema and persistence overview
 
 ## Governance Product Direction
 
-- [GOVERNANCE_V1_PLAN.md](GOVERNANCE_V1_PLAN.md) — product direction
 - [GOVERNANCE_V1_CHECKLIST.md](GOVERNANCE_V1_CHECKLIST.md) — decision filter for the API surface
-- [GOVERNANCE_V1_CONTRACT.md](GOVERNANCE_V1_CONTRACT.md) — contract notes
-- [HACKATHON_INSTRUCTION_CHANGE_PLAN.md](HACKATHON_INSTRUCTION_CHANGE_PLAN.md) — smallest shippable plan for the "same model, different instructions" story
-- [REPLAY_UI_FINDINGS_AND_PLAN.md](REPLAY_UI_FINDINGS_AND_PLAN.md) — UI direction and constraints
+- [GOVERNANCE_V1_CONTRACT.md](GOVERNANCE_V1_CONTRACT.md) — semantic contract for V1 endpoints and objects
 
 ## Suggested Reading Order
 

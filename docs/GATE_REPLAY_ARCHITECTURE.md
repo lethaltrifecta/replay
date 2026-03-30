@@ -1,6 +1,6 @@
 # Gate Replay Architecture
 
-This document describes how `cmdr gate check` works today and the target architecture that integrates freeze-mcp for deterministic agent-loop replay.
+This document describes how `cmdr gate check` works — both prompt-only replay and agent-loop replay with freeze-mcp.
 
 ## The Problem
 
@@ -10,7 +10,7 @@ This requires replaying a captured agent run with a different model and comparin
 
 ## Prompt-Only Replay
 
-The prompt-only replay engine (`pkg/replay/engine.go`) sends the **baseline's prompt** at each step to the variant model and records the response. This is the default mode when freeze-mcp is not available.
+The prompt-only replay engine (`pkg/replay/engine.go`) sends the **baseline's prompt** at each step to the variant model and records the response. This is the fallback mode when freeze-mcp is not available.
 
 ```
 Baseline trace (5 steps):
@@ -36,7 +36,7 @@ This mode is fast and requires no external infrastructure beyond agentgateway.
 
 ## Agent-Loop Replay with freeze-mcp
 
-The agent-loop replay mode replaces prompt-only replay with a real execution loop backed by freeze-mcp for deterministic tool responses. This is the primary mode when the full stack is available.
+The agent-loop replay (`pkg/replay/agent_loop.go`) runs a real execution loop backed by freeze-mcp for deterministic tool responses. This is the primary mode when `CMDR_MCP_URL` is configured.
 
 ### How It Works
 
@@ -53,35 +53,44 @@ The agent-loop replay mode replaces prompt-only replay with a real execution loo
               ┌────────────────┼────────────────┐
               │                │                │
               ▼                ▼                ▼
-     agentgateway         agentgateway      freeze-mcp
-     (LLM proxy)         (MCP proxy)       (frozen tools)
-         :3001              :3003             :9090
-              │                │                │
-              ▼                └───────────────►│
-         upstream LLM                    PostgreSQL
-         (or mock)                    (tool_captures)
+     agentgateway         freeze-mcp        PostgreSQL
+     (LLM proxy)         (frozen tools)   (tool_captures)
+              │                │
+              ▼                │
+         upstream LLM         │
+         (e.g. OpenAI)        │
 ```
 
 **Step-by-step replay loop:**
 
-1. Construct the initial prompt from the baseline's step 0 (system message + user message).
-2. Send to the variant model via agentgateway (LLM port) with `X-Freeze-Trace-ID` header.
+1. Construct the initial prompt from the baseline's step 0 (system message + user message + tools).
+2. Send to the variant model via agentgateway with `X-Freeze-Trace-ID` header.
 3. Variant model responds — may include `tool_calls`.
-4. For each tool call: execute via agentgateway (MCP port) → freeze-mcp.
+4. For each tool call: execute via freeze-mcp (MCP session).
    - **Match**: freeze-mcp finds a baseline capture with matching `(tool_name, args_hash, trace_id)` → returns the frozen result.
-   - **No match**: freeze-mcp returns an error → this is a **divergence**. The tool was never part of the approved baseline.
+   - **Locator match**: Per-call `X-Freeze-Span-Id` + `X-Freeze-Step-Index` headers select the exact baseline capture for duplicate tool calls.
+   - **No match**: freeze-mcp returns `tool_not_captured` → this is a **divergence**.
+   - **Exhausted**: All baseline captures for a tool+args pair consumed → `baseline_exhausted` divergence.
 5. Append assistant message + tool results to the conversation.
 6. Send updated conversation to variant model for the next turn.
-7. Repeat until the model produces a final response (no tool calls) or a divergence is detected.
+7. Repeat until the model produces a final response (no tool calls), a divergence is detected, or max turns is reached.
 8. Store the variant's full trace (steps + tool captures) in the database.
 9. Diff the baseline and variant trajectories. Produce verdict.
 
+### Mode Selection
+
+`cmdr gate check` automatically selects the replay mode:
+
+- If `CMDR_MCP_URL` is configured and freeze-mcp is reachable → **agent-loop replay**
+- If MCP connection fails → falls back to **prompt-only replay** with a warning
+- If `CMDR_MCP_URL` is not set → **prompt-only replay** only
+
 ### What This Achieves
 
-- **Real agent trajectory.** The variant model sees its own tool results (from freeze-mcp), not the baseline's. Decisions cascade naturally — a different tool call at step 0 changes what the model sees at step 1.
+- **Real agent trajectory.** The variant model sees its own tool results (from freeze-mcp), not the baseline's. Decisions cascade naturally.
 - **Deterministic tool environment.** freeze-mcp serves the exact same tool results the baseline saw. The only variable is the model's behavior.
-- **Safety boundary.** Any tool call not in the baseline captures is rejected by freeze-mcp. An unsafe model that tries `drop_table` when the baseline only did `inspect_schema` is blocked immediately.
-- **Divergence detection at the tool boundary.** You don't just see that the model *said* something different — you see that it *tried to do* something different, and what happened when it did.
+- **Safety boundary.** Any tool call not in the baseline captures is rejected by freeze-mcp.
+- **Divergence detection at the tool boundary.** You see that the model *tried to do* something different, not just that it *said* something different.
 
 ### Comparison
 
@@ -93,35 +102,29 @@ The agent-loop replay mode replaces prompt-only replay with a real execution loo
 | Uncaptured tool blocked | No | Yes (freeze-mcp rejects) |
 | Tests | "Same decisions given same context?" | "Same behavior when actually running?" |
 | Requires freeze-mcp | No | Yes |
-| Requires agentgateway MCP proxy | No | Yes |
 
 ## Key Components
 
-### freeze-mcp (existing, separate repo)
+### freeze-mcp (separate repo)
 
 Python MCP server serving frozen tool responses from `tool_captures` table.
 
-- Lookup: `(tool_name, args_hash, trace_id)` with optional `(span_id, step_index)` targeting
+- Lookup: `(tool_name, args_hash, trace_id)` with optional `(span_id, step_index)` locator targeting
 - Scoped per-session via `X-Freeze-Trace-ID` header
 - Returns `tool_not_captured` error for uncaptured tool calls
-- Already proven in the migration demo (`test-migration-demo-full-loop.sh`)
+- Contract tests: `test/e2e/freeze_contract_test.go` (11 scenarios)
 
-### agentgateway (existing, separate repo)
+### agentgateway (separate repo)
 
-LLM + MCP proxy. Two listeners:
+LLM proxy that emits OTEL traces. Used for:
+- Proxying chat completion requests to the upstream model
+- CORS configured to allow freeze headers
 
-- **LLM port**: Proxies chat completion requests to the upstream model. Forwards custom headers (including `X-Freeze-Trace-ID`).
-- **MCP port**: Proxies MCP tool calls to freeze-mcp. CORS configured to allow `X-Freeze-Trace-ID`.
+### Replay Engine (`pkg/replay/`)
 
-### Replay Engine
-
-`pkg/replay/engine.go` implements prompt-only replay and is the foundation for agent-loop mode. The agent-loop extension:
-
-1. Maintains its own conversation history (not the baseline's).
-2. Executes tool calls via an MCP client connected through agentgateway to freeze-mcp.
-3. Detects divergence when freeze-mcp rejects a tool call.
-4. Emits OTLP spans for each turn (LLM call + tool executions) so the variant trace is fully captured.
-5. Stores variant `replay_traces` and `tool_captures` for post-hoc diffing.
+- `engine.go` — prompt-only replay (step-by-step baseline prompt → variant model)
+- `agent_loop.go` — agent-loop replay (real conversation with tool execution via freeze-mcp)
+- `tool_executor.go` — MCP client with `ToolLocator` interface for per-call capture targeting
 
 ### Request Headers
 
@@ -129,17 +132,17 @@ The `X-Freeze-Trace-ID` header flows through:
 
 ```
 gate check request
-  → VariantConfig.RequestHeaders
-    → CompletionRequest.Headers (LLM calls)
-    → MCP session headers (tool calls)
-      → agentgateway → freeze-mcp
+  → FreezeHeaders() defaults to baseline trace ID if not provided
+    → NewMCPToolExecutor(ctx, mcpURL, freezeHeaders)
+      → freezeRoundTripper base headers (on every MCP request)
+        → freeze-mcp
 ```
 
-The API (`POST /api/v1/gate/check`) accepts `request_headers` in the request body, which are forwarded to both the LLM and MCP clients.
+Per-call locator headers (`X-Freeze-Span-Id`, `X-Freeze-Step-Index`) are set/cleared dynamically around each `CallTool` via the `ToolLocator` interface.
 
 ## Data Flow
 
-### Capture (already implemented)
+### Capture
 
 ```
 Live agent run
@@ -148,22 +151,23 @@ Live agent run
       → otel_traces + replay_traces + tool_captures (PostgreSQL)
 ```
 
-### Replay (target)
+### Replay
 
 ```
-cmdr gate check --baseline <trace-id> --model <variant> --freeze-trace-id <trace-id>
+cmdr gate check --baseline <trace-id> --model <variant>
   │
   ├─ Load baseline from replay_traces + tool_captures
   ├─ Create Experiment + ExperimentRuns
   │
-  ├─ Agent loop:
-  │    ├─ Send prompt to variant model (via agentgateway LLM port)
+  ├─ Agent loop (if MCP available):
+  │    ├─ Send prompt to variant model (via agentgateway)
   │    ├─ If tool_calls in response:
-  │    │    ├─ Execute each via agentgateway MCP port → freeze-mcp
+  │    │    ├─ Match baseline capture → set locator headers
+  │    │    ├─ Execute via freeze-mcp
   │    │    ├─ freeze-mcp returns frozen result OR error (divergence)
   │    │    └─ Append tool results to conversation
   │    ├─ Store variant ReplayTrace + ToolCaptures
-  │    └─ Repeat until no tool_calls or divergence
+  │    └─ Repeat until no tool_calls, divergence, or max turns
   │
   ├─ Diff baseline vs variant trajectories
   │    ├─ Tool call comparison (sequence, frequency)
@@ -174,30 +178,8 @@ cmdr gate check --baseline <trace-id> --model <variant> --freeze-trace-id <trace
   └─ Verdict: pass / fail
 ```
 
-### Verdict (already implemented)
-
-```
-cmdr demo migration verdict --baseline <id> --candidate <id>
-  │
-  ├─ Load both traces from DB
-  ├─ diff.CompareAll()
-  └─ Print verdict + dimension breakdown
-```
-
-## Migration Path
-
-The prompt-only replay engine remains useful as a fast, infrastructure-free sanity check. The agent-loop replay is the primary gate check mode when freeze-mcp and agentgateway are available.
-
-Suggested approach:
-
-1. The replay engine detects whether MCP connectivity is available (agentgateway MCP port + freeze-mcp health check).
-2. If available: run agent-loop replay with freeze-mcp.
-3. If not available: fall back to prompt-only replay with a warning that tool execution is not verified.
-4. The verdict always reports which mode was used.
-
 ## Prior Art
 
 - [docs/FREEZE_AGENT_LOOP.md](FREEZE_AGENT_LOOP.md) — First proof that freeze-mcp can drive a real agent loop
-- [docs/MIGRATION_DEMO.md](MIGRATION_DEMO.md) — Full capture → freeze replay → verdict demo (Python agent loop)
-- `scripts/test-migration-demo-full-loop.sh` — End-to-end orchestration proving the complete flow
+- [docs/MIGRATION_DEMO.md](MIGRATION_DEMO.md) — Full capture → freeze replay → verdict demo
 - `test/e2e/freeze_contract_test.go` — Contract tests for freeze-mcp behavior (11 scenarios)
