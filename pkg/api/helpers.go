@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/lethaltrifecta/replay/pkg/replay"
 	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
@@ -187,11 +188,11 @@ func apiReplayRequestHeadersFromStorage(headers map[string]string) *ReplayReques
 			continue
 		}
 		switch http.CanonicalHeaderKey(key) {
-		case http.CanonicalHeaderKey("X-Freeze-Trace-ID"):
+		case replay.HeaderFreezeTraceID:
 			out.FreezeTraceId = &value
-		case http.CanonicalHeaderKey("X-Freeze-Span-ID"):
+		case replay.HeaderFreezeSpanID:
 			out.FreezeSpanId = &value
-		case http.CanonicalHeaderKey("X-Freeze-Step-Index"):
+		case replay.HeaderFreezeStepIdx:
 			out.FreezeStepIndex = &value
 		}
 	}
@@ -209,13 +210,13 @@ func storageRequestHeadersFromAPI(headers *ReplayRequestHeaders) map[string]stri
 
 	raw := map[string]string{}
 	if headers.FreezeTraceId != nil && *headers.FreezeTraceId != "" {
-		raw[http.CanonicalHeaderKey("X-Freeze-Trace-ID")] = *headers.FreezeTraceId
+		raw[replay.HeaderFreezeTraceID] = *headers.FreezeTraceId
 	}
 	if headers.FreezeSpanId != nil && *headers.FreezeSpanId != "" {
-		raw[http.CanonicalHeaderKey("X-Freeze-Span-ID")] = *headers.FreezeSpanId
+		raw[replay.HeaderFreezeSpanID] = *headers.FreezeSpanId
 	}
 	if headers.FreezeStepIndex != nil && *headers.FreezeStepIndex != "" {
-		raw[http.CanonicalHeaderKey("X-Freeze-Step-Index")] = *headers.FreezeStepIndex
+		raw[replay.HeaderFreezeStepIdx] = *headers.FreezeStepIndex
 	}
 
 	return SanitizeRequestHeaders(raw)

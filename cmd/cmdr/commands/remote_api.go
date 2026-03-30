@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lethaltrifecta/replay/pkg/apiclient"
+	"github.com/lethaltrifecta/replay/pkg/replay"
 	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
@@ -132,10 +133,13 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 	}
 
 	experimentID := *createResp.JSON202.ExperimentId
-	cmd.Printf("Experiment %s submitted, polling for results...\n", experimentID.String())
+	cmd.Printf("Experiment %s submitted, waiting for results...\n", experimentID.String())
 
 	ticker := time.NewTicker(remoteStatusPollInterval)
 	defer ticker.Stop()
+
+	spinChars := []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
+	tick := 0
 
 	for {
 		select {
@@ -155,13 +159,12 @@ func runGateCheckRemote(cmd *cobra.Command, server, baselineTraceID, model, prov
 		status := *statusResp.JSON200.Status
 		switch status {
 		case storage.StatusPending, storage.StatusRunning:
-			progress := float32(0)
-			if statusResp.JSON200.Progress != nil {
-				progress = *statusResp.JSON200.Progress
-			}
-			cmd.Printf("  Progress: %.0f%%\n", float64(progress)*100)
+			spin := spinChars[tick%len(spinChars)]
+			fmt.Fprintf(cmd.OutOrStdout(), "\r  %c  running...", spin)
+			tick++
 			continue
 		case storage.StatusCompleted, storage.StatusFailed:
+			fmt.Fprintln(cmd.OutOrStdout()) // finish the spinner line
 			return fetchAndPrintRemoteReport(ctx, client, cmd, experimentID, model)
 		case storage.StatusCancelled:
 			return fmt.Errorf("experiment cancelled")
@@ -252,13 +255,13 @@ func remoteReplayRequestHeaders(headers map[string]string) *apiclient.ReplayRequ
 		return nil
 	}
 
-	if value := headers[http.CanonicalHeaderKey("X-Freeze-Trace-ID")]; value != "" {
+	if value := headers[replay.HeaderFreezeTraceID]; value != "" {
 		out.FreezeTraceId = &value
 	}
-	if value := headers[http.CanonicalHeaderKey("X-Freeze-Span-ID")]; value != "" {
+	if value := headers[replay.HeaderFreezeSpanID]; value != "" {
 		out.FreezeSpanId = &value
 	}
-	if value := headers[http.CanonicalHeaderKey("X-Freeze-Step-Index")]; value != "" {
+	if value := headers[replay.HeaderFreezeStepIdx]; value != "" {
 		out.FreezeStepIndex = &value
 	}
 	if out.FreezeTraceId == nil && out.FreezeSpanId == nil && out.FreezeStepIndex == nil {

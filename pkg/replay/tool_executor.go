@@ -11,6 +11,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// Canonical freeze-mcp header keys used for trace scoping and per-call locators.
+var (
+	HeaderFreezeTraceID  = http.CanonicalHeaderKey("X-Freeze-Trace-ID")
+	HeaderFreezeSpanID   = http.CanonicalHeaderKey("X-Freeze-Span-Id")
+	HeaderFreezeStepIdx  = http.CanonicalHeaderKey("X-Freeze-Step-Index")
+)
+
 // ToolExecutor abstracts tool execution for the agent loop.
 type ToolExecutor interface {
 	CallTool(ctx context.Context, toolName string, args map[string]any) (ToolResult, error)
@@ -49,8 +56,7 @@ func NewMCPToolExecutor(ctx context.Context, mcpURL string, headers map[string]s
 	baseHeaders := make(map[string]string, len(headers))
 	for k, v := range headers {
 		canonical := http.CanonicalHeaderKey(k)
-		if canonical == http.CanonicalHeaderKey("X-Freeze-Span-Id") ||
-			canonical == http.CanonicalHeaderKey("X-Freeze-Step-Index") {
+		if canonical == HeaderFreezeSpanID || canonical == HeaderFreezeStepIdx {
 			continue
 		}
 		baseHeaders[k] = v
@@ -122,8 +128,8 @@ func (m *MCPToolExecutor) CallTool(ctx context.Context, toolName string, args ma
 // SetLocator sets per-call locator headers for the next MCP request.
 func (m *MCPToolExecutor) SetLocator(spanID string, stepIndex int) {
 	m.rt.setOverrides(map[string]string{
-		http.CanonicalHeaderKey("X-Freeze-Span-Id"):    spanID,
-		http.CanonicalHeaderKey("X-Freeze-Step-Index"): strconv.Itoa(stepIndex),
+		HeaderFreezeSpanID:  spanID,
+		HeaderFreezeStepIdx: strconv.Itoa(stepIndex),
 	})
 }
 

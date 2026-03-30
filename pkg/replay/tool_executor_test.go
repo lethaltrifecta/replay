@@ -96,8 +96,8 @@ func TestSetLocator_ClearLocator(t *testing.T) {
 
 	rt.mu.Lock()
 	require.NotNil(t, rt.overrides)
-	assert.Equal(t, "span-42", rt.overrides[http.CanonicalHeaderKey("X-Freeze-Span-Id")])
-	assert.Equal(t, "3", rt.overrides[http.CanonicalHeaderKey("X-Freeze-Step-Index")])
+	assert.Equal(t, "span-42", rt.overrides[HeaderFreezeSpanID])
+	assert.Equal(t, "3", rt.overrides[HeaderFreezeStepIdx])
 	rt.mu.Unlock()
 
 	// ClearLocator should remove overrides
