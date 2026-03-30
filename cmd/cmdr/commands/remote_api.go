@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lethaltrifecta/replay/pkg/apiclient"
+	"github.com/lethaltrifecta/replay/pkg/replay"
 	"github.com/lethaltrifecta/replay/pkg/storage"
 )
 
@@ -252,13 +253,13 @@ func remoteReplayRequestHeaders(headers map[string]string) *apiclient.ReplayRequ
 		return nil
 	}
 
-	if value := headers[http.CanonicalHeaderKey("X-Freeze-Trace-ID")]; value != "" {
+	if value := headers[replay.HeaderFreezeTraceID]; value != "" {
 		out.FreezeTraceId = &value
 	}
-	if value := headers[http.CanonicalHeaderKey("X-Freeze-Span-ID")]; value != "" {
+	if value := headers[replay.HeaderFreezeSpanID]; value != "" {
 		out.FreezeSpanId = &value
 	}
-	if value := headers[http.CanonicalHeaderKey("X-Freeze-Step-Index")]; value != "" {
+	if value := headers[replay.HeaderFreezeStepIdx]; value != "" {
 		out.FreezeStepIndex = &value
 	}
 	if out.FreezeTraceId == nil && out.FreezeSpanId == nil && out.FreezeStepIndex == nil {

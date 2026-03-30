@@ -197,6 +197,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 
 		// Execute each tool call
 		diverged := false
+		locator, hasLocator := toolExec.(ToolLocator)
 		for tcIdx, tc := range assistantMsg.ToolCalls {
 			var toolArgs map[string]any
 			// Use json.Number to preserve int64 precision for large values (>2^53).
@@ -217,7 +218,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 			// is making more calls than the baseline — treat as divergence.
 			matched := captureQ.match(tc.Function.Name, argsHash)
 			if matched != nil {
-				if locator, ok := toolExec.(ToolLocator); ok {
+				if hasLocator {
 					locator.SetLocator(matched.SpanID, matched.StepIndex)
 				}
 			} else if captureQ.exhausted(tc.Function.Name, argsHash) {
@@ -235,7 +236,7 @@ func (e *Engine) ExecuteAgentLoop(ctx context.Context, prepared *PreparedRun, to
 			toolResult, toolErr := toolExec.CallTool(ctx, tc.Function.Name, toolArgs)
 
 			// Clear locator regardless of outcome.
-			if locator, ok := toolExec.(ToolLocator); ok {
+			if hasLocator {
 				locator.ClearLocator()
 			}
 
@@ -369,19 +370,14 @@ func (q *captureQueue) exhausted(toolName, argsHash string) bool {
 	if q == nil {
 		return false
 	}
+	found := false
 	for i, cap := range q.captures {
 		if cap.ToolName == toolName && cap.ArgsHash == argsHash {
 			if !q.used[i] {
 				return false // still has an unused match
 			}
-			// found at least one used match — keep scanning for unused
+			found = true
 		}
 	}
-	// Return true only if we found at least one (used) match
-	for _, cap := range q.captures {
-		if cap.ToolName == toolName && cap.ArgsHash == argsHash {
-			return true
-		}
-	}
-	return false
+	return found
 }

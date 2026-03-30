@@ -388,7 +388,7 @@ func printGateReport(cmd *cobra.Command, baselineTraceID, model string, experime
 func buildReplayHeaders(freezeTraceID string, headerSpecs []string) (map[string]string, error) {
 	headers := map[string]string{}
 	if freezeTraceID != "" {
-		headers[http.CanonicalHeaderKey("X-Freeze-Trace-ID")] = freezeTraceID
+		headers[replay.HeaderFreezeTraceID] = freezeTraceID
 	}
 
 	for _, spec := range headerSpecs {

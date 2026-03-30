@@ -433,9 +433,9 @@ func (s *Server) GetHealth(w http.ResponseWriter, r *http.Request) {
 
 // allowedRequestHeaders is the set of headers that the gate check API accepts.
 var allowedRequestHeaders = map[string]bool{
-	http.CanonicalHeaderKey("X-Freeze-Trace-ID"):   true,
-	http.CanonicalHeaderKey("X-Freeze-Span-ID"):    true,
-	http.CanonicalHeaderKey("X-Freeze-Step-Index"): true,
+	replay.HeaderFreezeTraceID: true,
+	replay.HeaderFreezeSpanID:  true,
+	replay.HeaderFreezeStepIdx: true,
 }
 
 // FreezeHeaders returns a copy of headers with X-Freeze-Trace-ID defaulted to
@@ -445,9 +445,8 @@ func FreezeHeaders(headers map[string]string, baselineTraceID string) map[string
 	for k, v := range headers {
 		out[k] = v
 	}
-	key := http.CanonicalHeaderKey("X-Freeze-Trace-ID")
-	if _, ok := out[key]; !ok {
-		out[key] = baselineTraceID
+	if _, ok := out[replay.HeaderFreezeTraceID]; !ok {
+		out[replay.HeaderFreezeTraceID] = baselineTraceID
 	}
 	return out
 }
