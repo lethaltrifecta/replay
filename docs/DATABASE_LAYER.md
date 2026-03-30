@@ -20,20 +20,22 @@ PostgreSQL storage backend for CMDR. All schema is managed via embedded SQL migr
 |-------|---------|
 | `experiments` | Experiment metadata, links to `baseline_trace_id` |
 | `experiment_runs` | One row per variant run in an experiment |
-| `analysis_results` | 4D comparative analysis (behavior, safety, quality, efficiency) |
+| `analysis_results` | Comparative analysis (behavior, safety, quality, efficiency) |
 
-### Evaluation tables (scaffolded)
+### Evaluation tables (scaffolded — storage layer complete, CLI stubs)
 
 | Table | Purpose |
 |-------|---------|
 | `evaluators` | Evaluator configurations |
 | `evaluation_runs` | Evaluation execution records |
 | `evaluator_results` | Individual evaluator scores |
+| `human_evaluations` | Human review queue with scores and feedback |
+| `ground_truth` | Expected outputs for task-based evaluation |
 | `evaluation_summary` | Aggregated rankings |
 
 ## Migrations
 
-Migrations are embedded via `go:embed` and applied idempotently on startup:
+Migrations are at `pkg/storage/schema/migrations/` and embedded via `go:embed`. Applied idempotently on startup:
 
 1. `001_initial_schema.sql` — Core tables, indexes, foreign keys
 2. `002_baselines_and_drift.sql` — Baselines table + drift_results table
@@ -53,22 +55,30 @@ The `Storage` interface (`pkg/storage/interface.go`) defines all operations. `Po
 
 Key method groups:
 
-- **Traces** — `CreateOTELTrace`, `CreateReplayTrace`, `ListReplayTraces`
+- **Traces** — `CreateOTELTrace`, `CreateReplayTrace`, `GetReplayTraceSpans`, `ListReplayTraces`, `ListUniqueTraces`, `CreateIngestionBatch`
 - **Tool captures** — `CreateToolCapture`, `GetToolCapturesByTrace`, `GetToolCaptureByArgs`
 - **Baselines** — `MarkTraceAsBaseline`, `UnmarkBaseline`, `ListBaselines`, `GetBaseline`
-- **Drift** — `CreateDriftResult`, `GetDriftResults`, `ListDriftResults`, `HasDriftResultForBaseline`
-- **Experiments** — `CreateExperiment`, `CreateExperimentRun`, `UpdateExperimentRun`
+- **Drift** — `CreateDriftResult`, `GetDriftResults`, `GetDriftResultsByBaseline`, `GetDriftResultForPair`, `ListDriftResults`, `HasDriftResultForBaseline`
+- **Experiments** — `CreateExperiment`, `GetExperiment`, `UpdateExperiment`, `ListExperiments`
+- **Experiment runs** — `CreateExperimentRun`, `GetExperimentRun`, `UpdateExperimentRun`, `ListExperimentRuns`
+- **Analysis** — `CreateAnalysisResult`, `GetAnalysisResults`, `GetLatestAnalysisResults`
+- **Evaluators** — `CreateEvaluator`, `GetEvaluator`, `GetEvaluatorByName`, `UpdateEvaluator`, `ListEvaluators`, `DeleteEvaluator`
+- **Evaluation runs** — `CreateEvaluationRun`, `GetEvaluationRun`, `UpdateEvaluationRun`
+- **Evaluator results** — `CreateEvaluatorResult`, `GetEvaluatorResults`
+- **Human evaluation** — `CreateHumanEvaluation`, `GetHumanEvaluation`, `UpdateHumanEvaluation`, `ListPendingHumanEvaluations`
+- **Ground truth** — `CreateGroundTruth`, `GetGroundTruth`, `UpdateGroundTruth`, `ListGroundTruth`, `DeleteGroundTruth`
+- **Evaluation summary** — `CreateEvaluationSummary`, `GetEvaluationSummary`
 
 ## Usage
 
 ```go
-storage, err := storage.NewPostgresStorage(connectionURL, maxConns)
+store, err := storage.NewPostgresStorage(connectionURL, maxConns)
 if err != nil {
     return err
 }
-defer storage.Close()
+defer store.Close()
 
-if err := storage.Migrate(ctx); err != nil {
+if err := store.Migrate(ctx); err != nil {
     return err
 }
 ```

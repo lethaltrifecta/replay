@@ -116,5 +116,25 @@ make fmt
 - `cmdr serve` — OTLP receiver + HTTP API server
 - `cmdr drift check <baseline> <candidate>` — compare traces against an explicit baseline
 - `cmdr drift list` — inspect stored drift results
+- `cmdr drift watch <baseline>` — continuous drift monitoring
 - `cmdr gate check` — replay baseline with variant model, produce pass/fail verdict
 - `cmdr demo seed` / `cmdr demo gate` — deterministic demo (no external LLM needed)
+- `cmdr demo migration run` — full capture → replay → verdict demo (requires agentgateway + freeze-mcp)
+
+## UI
+
+The governance review UI is at `ui/`. To run locally:
+
+```bash
+cd ui
+pnpm install
+REPLAY_API_ORIGIN=http://localhost:8080 pnpm dev
+# Open http://localhost:3000
+```
+
+Or via Docker Compose (full stack including agentgateway + freeze-mcp):
+
+```bash
+docker compose -f docker-compose.dev.yml up -d
+# Open http://localhost:3000
+```
