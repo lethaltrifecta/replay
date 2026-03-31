@@ -180,6 +180,5 @@ cmdr gate check --baseline <trace-id> --model <variant>
 
 ## Prior Art
 
-- [docs/FREEZE_AGENT_LOOP.md](FREEZE_AGENT_LOOP.md) — First proof that freeze-mcp can drive a real agent loop
 - [docs/MIGRATION_DEMO.md](MIGRATION_DEMO.md) — Full capture → freeze replay → verdict demo
 - `test/e2e/freeze_contract_test.go` — Contract tests for freeze-mcp behavior (11 scenarios)

@@ -8,7 +8,7 @@
 
 **Same model. Same tools. Different instructions. CMDR caught it.**
 
-CMDR is a governance system for MCP-enabled AI agents. It captures agent runs via OpenTelemetry, detects behavioral drift against approved baselines, and gates deployments by replaying scenarios with frozen tool responses.
+CMDR (**C**omparative **M**odel **D**eterministic **R**eplay) is a governance system for MCP-enabled AI agents. It captures agent runs via OpenTelemetry, detects behavioral drift against approved baselines, and gates deployments by replaying scenarios with frozen tool responses.
 
 > Built for [MCP_HACK//26](https://aihackathon.dev/) in the **Secure & Govern MCP** track using [agentgateway](https://github.com/solo-io/agentgateway) and [freeze-mcp](https://github.com/lethaltrifecta/freeze-mcp).
 

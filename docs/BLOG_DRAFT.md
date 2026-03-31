@@ -15,7 +15,7 @@ These changes are invisible to model evaluation tools. They don't show up in API
 
 ## What CMDR Does
 
-CMDR is a governance system for MCP agents. It captures agent runs via OpenTelemetry, detects behavioral drift against known-good baselines, and gates deployments by replaying scenarios with frozen tool responses.
+CMDR (**C**omparative **M**odel **D**eterministic **R**eplay) is a governance system for MCP agents. It captures agent runs via OpenTelemetry, detects behavioral drift against known-good baselines, and gates deployments by replaying scenarios with frozen tool responses.
 
 The key insight: **CMDR governs behavior, not vendor knobs.** Any change that alters how an agent acts — model swaps, prompt changes, role files, policy files, tool configuration — gets caught by the same governance pipeline.
 
