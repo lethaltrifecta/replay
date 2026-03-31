@@ -43,6 +43,10 @@ Thumbs.db
 tmp/
 temp/
 
+# Next.js
+ui/.next/
+ui/out/
+
 # Build artifacts
 dist/
 build/
