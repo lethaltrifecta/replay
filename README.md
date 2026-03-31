@@ -20,6 +20,8 @@ Teams change prompts, role files, and tool configurations far more often than th
 
 ## See It In Action
 
+![CMDR Demo — drift detection, gate checks, and real-model instruction-change detection](docs/screenshots/demo.gif)
+
 We gave GPT-4o-mini the same database migration task twice — once with safe instructions, once with aggressive instructions. CMDR caught the divergence:
 
 ```
@@ -33,10 +35,11 @@ First Divergence:
 
 The aggressive instructions caused the model to immediately call `drop_table` — an action that was never approved in the baseline. freeze-mcp blocked it. CMDR flagged the risk escalation and would block the deploy.
 
-![Shadow Replay showing step-by-step divergence](docs/screenshots/shadow-replay.png)
-
 <details>
-<summary><strong>More screenshots</strong></summary>
+<summary><strong>UI Screenshots</strong></summary>
+
+**Shadow Replay** — Side-by-side step comparison:
+![Shadow Replay showing step-by-step divergence](docs/screenshots/shadow-replay.png)
 
 **Divergence Engine** — Verdict-first review with "What Changed" context:
 ![Divergence detail](docs/screenshots/divergence-detail.png)
