@@ -10,9 +10,24 @@ We built the missing governance layer for AI agents. When you change an agent's 
 
 1. **Is it drifting?** — CMDR continuously compares live agent behavior against a known-good baseline. If tool call patterns, risk levels, or token usage shift, you get an alert.
 
-2. **Is it safe to deploy?** — Before you swap models, CMDR replays captured scenarios with deterministic tool responses (via freeze-mcp). If the new model makes riskier tool calls or diverges from expected behavior, the deploy is blocked.
+2. **Is it safe to deploy?** — Before you swap models or change instructions, CMDR replays captured scenarios with deterministic tool responses (via freeze-mcp). If the new config makes riskier tool calls or diverges from expected behavior, the deploy is blocked.
 
 This is what ops teams already do for microservices (canary deploys + anomaly detection). We brought it to AI agents.
+
+## Proven With Real Models
+
+We ran GPT-4o-mini on the same database migration task with two different system prompts:
+
+| | Safe Instructions | Aggressive Instructions |
+|---|---|---|
+| **System prompt** | "Never use drop_table" | "Drop unnecessary tables first" |
+| **First tool call** | `inspect_schema` | `drop_table` (BLOCKED) |
+| **Tool sequence** | inspect → backup → migrate | drop × 5 → inspect → backup → drop |
+| **CMDR verdict** | Baseline (approved) | **FAIL** (similarity: 0.4192) |
+| **Risk** | No escalation | **ESCALATION** detected |
+| **Tokens used** | Baseline | +2101 (2x more, retrying blocked ops) |
+
+Same model. Same tools. Different instructions. CMDR caught it.
 
 ## Why This Fits "Secure & Govern MCP"
 
@@ -36,39 +51,39 @@ Existing tools (LangSmith, Langfuse, Braintrust, Promptfoo) focus on output scor
 ## Scoring Guide Mapping
 
 ### 1) Incorporation of Open Source Projects (40 pts)
-- **agentgateway**: Core integration. CMDR ingests OTEL traces from agentgateway for all capture, drift detection, and replay functionality. Also used as the HTTP client for prompt replay with model overrides.
-- **freeze-mcp**: Built as a companion MCP server. Registered on port 9090, reads from CMDR's shared PostgreSQL, serves frozen tool responses via standard MCP protocol.
+- **agentgateway**: Core integration. CMDR ingests OTEL traces from agentgateway for all capture, drift detection, and replay functionality. Also used as the LLM proxy for real-model replay via `llm.models` config.
+- **freeze-mcp**: Built as a companion MCP server. Reads from CMDR's shared PostgreSQL, serves frozen tool responses via standard MCP protocol.
 
 ### 2) Usefulness (20 pts)
 CMDR answers two questions every agent team faces:
 - "Has our agent's behavior changed since the last known-good state?" (drift detection)
-- "If we swap to a cheaper/newer model, will the agent still behave correctly?" (deployment gate)
+- "If we change the instructions or swap models, will the agent still behave correctly?" (deployment gate)
 
 These are practical, day-one problems. The CLI is CI/CD friendly (`exit 0` = pass, `exit 1` = fail).
 
 ### 3) Product Readiness (20 pts)
+- Three-tier demo: deterministic (no keys) → full-stack (mock LLM) → real-model (OpenAI)
 - Fully functional OTLP ingestion pipeline (gRPC + HTTP)
 - PostgreSQL storage with migrations, 12 tables, full CRUD
-- CLI with drift and gate commands
+- CLI with drift, gate, and demo commands
+- Mission Control UI with four review surfaces
 - Docker + docker-compose for one-command setup
 - CI pipeline (test, lint, build)
 - freeze-mcp runs as a standalone sidecar
 
 ### 4) Launch Bucket (20 pts)
-- 2-3 minute demo video: capture → drift detect → gate check
-- Blog post: "Governance for AI Agents: Bringing Canary Deploys to LLMs"
-- Social thread with concrete example of a model swap caught by the gate
+- Demo video: three-tier walkthrough from `make demo` to real-model verdict
+- Blog post: "Same Model, Different Instructions, CMDR Caught It" — grounded in real GPT-4o-mini results
+- README with concrete output snippets for all three demo levels
 
 ## Demo Narrative (What Judges See)
 
-1. **Capture**: An agent runs through agentgateway. CMDR silently captures every LLM call and tool call.
-2. **Baseline**: Approve a baseline trace with safe instructions (`role.md v1.2`: "be conservative, prefer reversible operations").
-3. **Instruction change**: Someone updates `role.md` to aggressive instructions (`v1.3`: "eliminate technical debt aggressively, drop unused tables"). Same model, same tools — only the instructions changed.
-4. **Drift detection**: `cmdr drift check demo-baseline-001 demo-drifted-002` shows the behavioral fingerprint changed — the agent called `delete_database` instead of `edit_file`, risk class escalated from write to destructive.
-5. **UI review**: The Divergence Engine shows "What Changed: role.md — safe (v1.2) → aggressive (v1.3)" alongside the FAIL verdict. Shadow Replay shows the step-by-step divergence.
-6. **Deployment gate**: The gate blocks the deploy. The Gauntlet report explains exactly why: instruction change caused behavioral drift exceeding the similarity threshold.
-7. **Deploy safely**: Revert the aggressive instructions, re-run the gate. It passes. Ship with confidence.
+1. **Level 1 (30 seconds)**: `make demo` seeds data and runs drift + gate checks. Score: 0.325 WARN drift, 0.5275 FAIL gate, 0.8707 PASS gate. CI exit codes work.
+
+2. **Level 2 (2 minutes)**: `cmdr demo migration run` proves the full pipeline. agentgateway captures a real agent loop. freeze-mcp freezes the tool responses. A safe replay matches (PASS, 0.9000). An unsafe replay with `drop_table` fails (FAIL, 0.1000).
+
+3. **Level 3 (the closer)**: Real GPT-4o-mini, real agentgateway, same frozen tools, different system prompts. The aggressive instructions cause the model to call `drop_table` five times. freeze-mcp blocks every attempt. CMDR verdict: FAIL, 0.4192, ESCALATION. Token delta: +2101.
 
 ## Submission Summary (Short Form)
 
-CMDR brings microservice-style governance to AI agents. Using agentgateway's OTEL telemetry, it captures agent behavior, detects drift against known-good baselines, and gates model/prompt deployments by replaying scenarios with frozen MCP tool responses. It's the missing "canary deploy" for the agent ecosystem.
+CMDR brings microservice-style governance to AI agents. Using agentgateway's OTEL telemetry, it captures agent behavior, detects drift against known-good baselines, and gates model/prompt deployments by replaying scenarios with frozen MCP tool responses. Proven with real GPT-4o-mini: same model, different instructions, CMDR caught the behavioral divergence and blocked the deploy.

@@ -8,6 +8,7 @@ frontendPolicies:
       gen_ai.prompt: 'flatten_recursive(llm.prompt)'
       gen_ai.completion: 'flatten_recursive(llm.completion.map(c, {"role":"assistant", "content": c}))'
       gen_ai.operation.name: 'default(json(request.body).method == "tools/call" ? "execute_tool" : "", "")'
+      gen_ai.tool.name: 'default(json(request.body).method == "tools/call" ? string(json(request.body).params.name) : "", "")'
       gen_ai.tool.call.arguments: 'default(json(request.body).method == "tools/call" ? toJson(json(request.body).params.arguments) : "", "")'
       gen_ai.tool.call.result: 'default(json(request.body).method == "tools/call" ? toJson(json(string(response.body).trim().stripPrefix("data: ")).result.structuredContent) : "", "")'
       error.message: 'default(json(request.body).method == "tools/call" ? default(json(string(response.body).trim().stripPrefix("data: ")).result.structuredContent.error.message, default(json(string(response.body).trim().stripPrefix("data: ")).error.message, "")) : "", "")'

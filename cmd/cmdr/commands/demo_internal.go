@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -36,7 +37,8 @@ var demoInternalRandomHexCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		cmd.Println(value)
+		// Write to os.Stdout so shell $() captures work correctly.
+		fmt.Fprintln(os.Stdout, value)
 		return nil
 	},
 }

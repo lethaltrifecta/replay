@@ -341,7 +341,7 @@ run_migration_demo_agent \
   --expect-tool-error
 
 wait_for_trace_detail "$UNSAFE_REPLAY_TRACE_ID" "2" "1" "unsafe replay trace detail"
-wait_for_trace_tool_error "$UNSAFE_REPLAY_TRACE_ID" "tool_not_captured" "unsafe replay tool error"
+wait_for_trace_tool_error "$UNSAFE_REPLAY_TRACE_ID" "drop_table" "unsafe replay tool error"
 
 echo
 echo "CMDR verdict: safe replay"
