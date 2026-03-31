@@ -35,8 +35,7 @@ First Divergence:
 
 The aggressive instructions caused the model to immediately call `drop_table` — an action that was never approved in the baseline. freeze-mcp blocked it. CMDR flagged the risk escalation and would block the deploy.
 
-<details>
-<summary><strong>UI Screenshots</strong></summary>
+### Mission Control UI
 
 **Shadow Replay** — Side-by-side step comparison:
 ![Shadow Replay showing step-by-step divergence](docs/screenshots/shadow-replay.png)
@@ -46,8 +45,6 @@ The aggressive instructions caused the model to immediately call `drop_table` �
 
 **The Gauntlet** — Answers all four operator questions:
 ![Gauntlet report](docs/screenshots/gauntlet-report.png)
-
-</details>
 
 ## Key Features
 
