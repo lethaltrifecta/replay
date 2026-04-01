@@ -104,6 +104,8 @@ CMDR sits behind [agentgateway](https://github.com/solo-io/agentgateway) and use
 
 This means CMDR can isolate exactly what caused the divergence. If the tools are frozen and the model is the same, the only explanation is the instruction change.
 
+Unlike trace-replay tools that evaluate output quality (LangSmith, Langfuse, Braintrust), CMDR governs *behavioral* drift — the tool call patterns, risk escalations, and decision sequences that change when instructions change. It's not an eval tool. It's a gate.
+
 ## Why This Matters
 
 Teams ship changes to `claude.md`, `role.md`, prompt templates, and tool rules constantly — often multiple times a day. Today, none of those changes go through behavioral governance. There's no diff, no gate, no review of what the agent will actually *do* differently. One bad `role.md` edit can turn a safe agent destructive, and nobody finds out until production.

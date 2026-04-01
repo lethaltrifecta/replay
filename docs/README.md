@@ -6,7 +6,7 @@
 - [QUICKSTART.md](QUICKSTART.md) — Local setup, health checks, and first commands
 - [DEMO.md](DEMO.md) — Complete runbook for all three demo levels with expected outputs
 
-## Demo And Launch
+## Demo & Submission
 
 - [DEMO.md](DEMO.md) — **Primary demo runbook**: Level 1 (no API keys), Level 2 (agentgateway + freeze-mcp), Level 3 (real OpenAI)
 - [MIGRATION_DEMO.md](MIGRATION_DEMO.md) — Deep-dive on the full-stack migration scenario
@@ -16,8 +16,6 @@
 ## Architecture
 
 - [GATE_REPLAY_ARCHITECTURE.md](GATE_REPLAY_ARCHITECTURE.md) — Replay and gate design (prompt-only + agent-loop)
-- [AGENTGATEWAY_CAPTURE.md](AGENTGATEWAY_CAPTURE.md) — Capture path through agentgateway
-- [OTLP_RECEIVER.md](OTLP_RECEIVER.md) — OTLP ingestion and parsing details
 - [DATABASE_LAYER.md](DATABASE_LAYER.md) — Schema and persistence overview
 
 ## Suggested Reading Order

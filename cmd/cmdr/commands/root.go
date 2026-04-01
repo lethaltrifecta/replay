@@ -27,9 +27,6 @@ policies, and tool configurations.`,
 func init() {
 	// Add subcommands
 	rootCmd.AddCommand(serveCmd)
-	rootCmd.AddCommand(experimentCmd)
-	rootCmd.AddCommand(evalCmd)
-	rootCmd.AddCommand(groundTruthCmd)
 	rootCmd.AddCommand(driftCmd)
 	rootCmd.AddCommand(gateCmd)
 	rootCmd.AddCommand(demoCmd)

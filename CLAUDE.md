@@ -209,9 +209,6 @@ cmd/cmdr/                  # CLI entry point
     drift.go               # Drift detection + baseline management commands
     gate.go                # Deployment gate check + report commands
     demo.go                # Deterministic hackathon demo commands
-    experiment.go          # Experiment management (scaffolded)
-    eval.go                # Evaluation management (scaffolded)
-    ground_truth.go        # Ground truth management (scaffolded)
 
 pkg/
   api/                     # HTTP API server, handlers, middleware pipeline
@@ -314,20 +311,6 @@ All config via environment variables with `CMDR_` prefix. See `.env.example`. Re
 
 1. **agentgateway** — LLM proxy that emits OTEL traces. CMDR ingests these traces for capture. Also used as the HTTP client for prompt replay with different model configs.
 2. **freeze-mcp** — MCP server (separate repo) that serves frozen tool responses. Reads from CMDR's `tool_captures` table. Critical for deterministic replay.
-
-## Implementation Status
-
-**Complete:**
-- Config, PostgreSQL storage (full CRUD, 12 tables, 3 migrations), OTLP receiver (gRPC + HTTP), OTEL span parser
-- `pkg/drift/` — behavioral fingerprinting + comparison scoring engine
-- `pkg/replay/` — prompt replay orchestration (baseline → agentgateway → variant capture)
-- `pkg/agwclient/` — agentgateway HTTP client (OpenAI-compatible, retry with backoff)
-- `pkg/diff/` — structural + semantic behavior diff (6-dimension scoring)
-- `pkg/api/` — HTTP API server with handlers and middleware
-- CLI: drift baseline/check/status/watch, gate check/report, demo seed/gate/migration
-- Docker/CI/Makefile, freeze-mcp (separate repo, fully built)
-
-**Scaffolded (not yet implemented):** experiment, eval, ground-truth CLI commands (storage tables exist).
 
 ## Code Conventions
 
