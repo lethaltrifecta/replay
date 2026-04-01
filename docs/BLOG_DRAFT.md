@@ -106,9 +106,11 @@ This means CMDR can isolate exactly what caused the divergence. If the tools are
 
 ## Why This Matters
 
-Teams ship `claude.md`, `role.md`, prompt templates, and tool rules constantly. These changes need the same governance as model swaps:
+Teams ship changes to `claude.md`, `role.md`, prompt templates, and tool rules constantly — often multiple times a day. Today, none of those changes go through behavioral governance. There's no diff, no gate, no review of what the agent will actually *do* differently. One bad `role.md` edit can turn a safe agent destructive, and nobody finds out until production.
 
-- **CI integration**: `cmdr gate check` returns exit code 0 (pass) or 1 (fail). Drop it into any pipeline.
+CMDR closes that gap:
+
+- **CI integration**: `cmdr gate check` returns exit code 0 (pass) or 1 (fail). Drop it into any pipeline so instruction changes get the same governance as code changes.
 - **Audit trail**: Every instruction change is tagged with `change_context` metadata. The UI shows exactly which file changed and how.
 - **Graduated review**: FAIL verdicts route to the Divergence Engine for triage. Approved runs become new baselines.
 
@@ -142,6 +144,8 @@ make demo              # seeds data + drift check + gate checks
 cd ui && REPLAY_API_ORIGIN=http://localhost:8080 pnpm dev
 # Open http://localhost:3000
 ```
+
+Govern agents before they govern you.
 
 ---
 
