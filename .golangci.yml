@@ -13,21 +13,23 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
         - fmt.Fprint
-        - (io.Closer).Close
-        - (*tabwriter.Writer).Flush
-        - (*net/http.Response).Body.Close
-        - (*net/http.Request).Body.Close
         - io.Copy
-        - (net/http.ResponseWriter).Write
         - os.Setenv
+        - (net/http.ResponseWriter).Write
+        - (*text/tabwriter.Writer).Flush
     staticcheck:
       checks:
         - "all"
         - "-QF*"
+        - "-ST1000" # package comments
+        - "-ST1003" # ID naming conventions
   exclusions:
     rules:
       - path: _test\.go
         linters:
           - errcheck
+      - linters:
+          - errcheck
+        source: "defer "
     paths:
       - vendor
