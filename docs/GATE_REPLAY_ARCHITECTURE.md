@@ -180,5 +180,5 @@ cmdr gate check --baseline <trace-id> --model <variant>
 
 ## Prior Art
 
-- [docs/MIGRATION_DEMO.md](MIGRATION_DEMO.md) — Full capture → freeze replay → verdict demo
+- [docs/DEMO.md](DEMO.md) — Full capture → freeze replay → verdict demo (Level 2 and 3)
 - `test/e2e/freeze_contract_test.go` — Contract tests for freeze-mcp behavior (11 scenarios)
