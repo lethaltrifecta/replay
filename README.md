@@ -55,6 +55,7 @@ The aggressive instructions caused the model to immediately call `drop_table` �
 | **Deterministic Replay** | [freeze-mcp](https://github.com/lethaltrifecta/freeze-mcp) serves frozen tool responses so the only variable is the agent's behavior |
 | **Change Context Tracking** | Tags runs with what changed (instruction file, model, config) and surfaces it in the UI |
 | **Mission Control UI** | Four review surfaces: Launchpad, Divergence Engine, Shadow Replay, The Gauntlet |
+| **Prompt Injection Defense** | Catches the *behavioral effect* of prompt injection — no pattern matching needed |
 | **CI-Friendly** | `exit 0` for pass, `exit 1` for fail — drop into any pipeline |
 
 ---
@@ -198,6 +199,12 @@ First Divergence:
 
 Token delta: +2101 (aggressive agent burned 2x tokens retrying blocked operations)
 ```
+
+---
+
+## Beyond Instruction Changes: Prompt Injection
+
+CMDR doesn't just catch bad config changes — it catches prompt injection too. If a poisoned tool response or user input causes the agent to deviate from its approved baseline (calling tools it shouldn't, escalating risk levels, changing decision patterns), CMDR flags the behavioral divergence. No regex patterns, no input sanitization — just: "the agent did something it's never done before." This catches novel injection techniques that bypass traditional input filtering.
 
 ---
 
