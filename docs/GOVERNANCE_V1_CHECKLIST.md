@@ -1,6 +1,6 @@
 # Governance V1 Checklist
 
-This checklist applies the governance-first plan in [GOVERNANCE_V1_PLAN.md](./GOVERNANCE_V1_PLAN.md) to the current OpenAPI contract in [api/openapi.yaml](../api/openapi.yaml).
+This checklist applies the governance-first design to the current OpenAPI contract in [api/openapi.yaml](../api/openapi.yaml).
 
 Use this document as the filter for further work on the branch.
 
