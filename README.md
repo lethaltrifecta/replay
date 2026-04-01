@@ -55,7 +55,7 @@ The aggressive instructions caused the model to immediately call `drop_table` �
 | **Deterministic Replay** | [freeze-mcp](https://github.com/lethaltrifecta/freeze-mcp) serves frozen tool responses so the only variable is the agent's behavior |
 | **Change Context Tracking** | Tags runs with what changed (instruction file, model, config) and surfaces it in the UI |
 | **Mission Control UI** | Four review surfaces: Launchpad, Divergence Engine, Shadow Replay, The Gauntlet |
-| **Prompt Injection Defense** | Catches the *behavioral effect* of prompt injection — no pattern matching needed |
+| **Poisoned Agent Detection** | Detects behavioral changes from compromised agents — whether caused by prompt injection, malicious inputs, or other attacks |
 | **CI-Friendly** | `exit 0` for pass, `exit 1` for fail — drop into any pipeline |
 
 ---
@@ -202,9 +202,9 @@ Token delta: +2101 (aggressive agent burned 2x tokens retrying blocked operation
 
 ---
 
-## Beyond Instruction Changes: Prompt Injection
+## Beyond Instruction Changes: Poisoned Agents
 
-CMDR doesn't just catch bad config changes — it catches prompt injection too. If a poisoned tool response or user input causes the agent to deviate from its approved baseline (calling tools it shouldn't, escalating risk levels, changing decision patterns), CMDR flags the behavioral divergence. No regex patterns, no input sanitization — just: "the agent did something it's never done before." This catches novel injection techniques that bypass traditional input filtering.
+CMDR doesn't just detect bad config changes — it can detect behavioral changes from compromised agents, whether caused by prompt injection, malicious tool responses, or other attacks. If a poisoned agent deviates from its approved baseline (calling tools it shouldn't, escalating risk levels, changing decision patterns), CMDR flags the behavioral divergence. Because detection is based on behavior rather than input patterns, it can surface anomalies that traditional input filtering would miss.
 
 ---
 

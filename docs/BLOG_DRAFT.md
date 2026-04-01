@@ -118,11 +118,11 @@ CMDR closes that gap:
 
 The story isn't "we compare models." The story is: **"This PR changed agent instructions, so governance checks ran automatically."**
 
-### Prompt Injection — For Free
+### Detecting Poisoned Agents
 
-CMDR also catches prompt injection without any injection-specific logic. If a poisoned tool response or malicious user input causes the agent to call tools it never called in the baseline, escalate risk levels, or change its decision patterns, the behavioral fingerprint diverges and CMDR flags it. No regex. No input sanitization. Just: "the agent did something it's never done before."
+CMDR can also detect behavioral changes from compromised agents — whether caused by prompt injection, malicious tool responses, or other attacks. If a poisoned agent starts calling tools it never called in the baseline, escalates risk levels, or changes its decision patterns, the behavioral fingerprint diverges and CMDR flags it.
 
-This is more robust than pattern matching because it catches novel injection techniques. You don't need to anticipate the attack — you just need to know the agent deviated from approved behavior.
+Because detection is based on behavior rather than input patterns, it can surface anomalies that traditional input filtering would miss. You don't need to anticipate the specific attack — you just need to know the agent deviated from approved behavior.
 
 ## Try It
 
