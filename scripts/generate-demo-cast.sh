@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-cd /Users/yitaek.hwang/Documents/hackathon/replay
+cd "$(dirname "$0")/.."
 source .env 2>/dev/null || true
 export CMDR_POSTGRES_URL="postgres://cmdr:cmdr_dev_password@localhost:5432/cmdr?sslmode=disable"
 
