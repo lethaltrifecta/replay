@@ -29,7 +29,7 @@ func connectDB() (storage.Storage, error) {
 	}
 
 	if err := store.Migrate(ctx); err != nil {
-		store.Close()
+		_ = store.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 

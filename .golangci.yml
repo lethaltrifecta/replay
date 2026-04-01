@@ -1,0 +1,35 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        - io.Copy
+        - os.Setenv
+        - (net/http.ResponseWriter).Write
+        - (*text/tabwriter.Writer).Flush
+    staticcheck:
+      checks:
+        - "all"
+        - "-QF*"
+        - "-ST1000" # package comments
+        - "-ST1003" # ID naming conventions
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+      - linters:
+          - errcheck
+        source: "defer "
+    paths:
+      - vendor
