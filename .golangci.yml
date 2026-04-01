@@ -1,0 +1,36 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+
+linters-settings:
+  errcheck:
+    exclude-functions:
+      - fmt.Fprintf
+      - fmt.Fprintln
+      - fmt.Fprint
+      - (io.Closer).Close
+      - (*tabwriter.Writer).Flush
+      - (*net/http.Response).Body.Close
+      - (*net/http.Request).Body.Close
+      - io.Copy
+      - (net/http.ResponseWriter).Write
+      - os.Setenv
+
+  staticcheck:
+    checks:
+      - "all"
+      - "-QF*" # disable quickfix suggestions
+
+issues:
+  exclude-dirs:
+    - vendor
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck

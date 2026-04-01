@@ -332,13 +332,6 @@ func getStringAttrAny(attrs pcommon.Map, keys []string, defaultVal string) strin
 	return defaultVal
 }
 
-func getIntAttr(attrs pcommon.Map, key string, defaultVal int) int {
-	if attr, ok := attrs.Get(key); ok {
-		return int(attr.Int())
-	}
-	return defaultVal
-}
-
 func getIntAttrAny(attrs pcommon.Map, keys []string, defaultVal int) int {
 	for _, key := range keys {
 		if attr, ok := attrs.Get(key); ok {

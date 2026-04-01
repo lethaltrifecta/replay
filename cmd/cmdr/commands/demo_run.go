@@ -127,8 +127,8 @@ func runMigrationDemo(cmd *cobra.Command, args []string) error {
 func renderMigrationDemoReportMarkdown(artifact *migrationDemoReportArtifact) string {
 	var builder strings.Builder
 
-	builder.WriteString(fmt.Sprintf("# Migration Demo Report: %s\n\n", artifact.Scenario))
-	builder.WriteString(fmt.Sprintf("**Generated at:** %s\n\n", artifact.GeneratedAt.Format(time.RFC1123)))
+	fmt.Fprintf(&builder, "# Migration Demo Report: %s\n\n", artifact.Scenario)
+	fmt.Fprintf(&builder, "**Generated at:** %s\n\n", artifact.GeneratedAt.Format(time.RFC1123))
 
 	builder.WriteString("## Executive Summary\n\n")
 	builder.WriteString(artifact.JudgeHighlight + "\n\n")
@@ -137,11 +137,11 @@ func renderMigrationDemoReportMarkdown(artifact *migrationDemoReportArtifact) st
 	writeMigrationVerdictMarkdown(&builder, artifact.Unsafe)
 
 	builder.WriteString("## Artifacts\n\n")
-	builder.WriteString(fmt.Sprintf("- `report.json`: `%s`\n", filepath.Join(artifact.ReportDir, "report.json")))
-	builder.WriteString(fmt.Sprintf("- `report.md`: `%s`\n", filepath.Join(artifact.ReportDir, "report.md")))
-	builder.WriteString(fmt.Sprintf("- safe verdict log: `%s`\n", artifact.Summary.Logs.SafeVerdict))
-	builder.WriteString(fmt.Sprintf("- unsafe verdict log: `%s`\n", artifact.Summary.Logs.UnsafeVerdict))
-	builder.WriteString(fmt.Sprintf("- full run log: `%s`\n", artifact.Summary.Logs.RunLog))
+	fmt.Fprintf(&builder, "- `report.json`: `%s`\n", filepath.Join(artifact.ReportDir, "report.json"))
+	fmt.Fprintf(&builder, "- `report.md`: `%s`\n", filepath.Join(artifact.ReportDir, "report.md"))
+	fmt.Fprintf(&builder, "- safe verdict log: `%s`\n", artifact.Summary.Logs.SafeVerdict)
+	fmt.Fprintf(&builder, "- unsafe verdict log: `%s`\n", artifact.Summary.Logs.UnsafeVerdict)
+	fmt.Fprintf(&builder, "- full run log: `%s`\n", artifact.Summary.Logs.RunLog)
 
 	return builder.String()
 }
@@ -173,12 +173,4 @@ func writeMigrationVerdictMarkdown(builder *strings.Builder, verdict *migrationD
 		verdict.Comparison.CandidateToolCount,
 		displayTraceToolSource(verdict.Comparison.CandidateToolSource),
 	))
-}
-
-func restoreEnv(key, value string, hadValue bool) {
-	if hadValue {
-		_ = os.Setenv(key, value)
-		return
-	}
-	_ = os.Unsetenv(key)
 }
