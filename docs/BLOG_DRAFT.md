@@ -118,6 +118,12 @@ CMDR closes that gap:
 
 The story isn't "we compare models." The story is: **"This PR changed agent instructions, so governance checks ran automatically."**
 
+### Detecting Poisoned Agents
+
+CMDR can also detect behavioral changes from compromised agents — whether caused by prompt injection, malicious tool responses, or other attacks. If a poisoned agent starts calling tools it never called in the baseline, escalates risk levels, or changes its decision patterns, the behavioral fingerprint diverges and CMDR flags it.
+
+Because detection is based on behavior rather than input patterns, it can surface anomalies that traditional input filtering would miss. You don't need to anticipate the specific attack — you just need to know the agent deviated from approved behavior.
+
 ## Try It
 
 Three levels of demo — pick your depth:
