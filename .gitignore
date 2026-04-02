@@ -47,6 +47,14 @@ temp/
 ui/.next/
 ui/out/
 
+# Node
+node_modules/
+test-results/
+
+# Remotion
+video/out/
+video/node_modules/
+
 # Build artifacts
 dist/
 build/
