@@ -20,6 +20,8 @@ Teams change prompts, role files, and tool configurations far more often than th
 
 ## See It In Action
 
+<video src="https://github.com/user-attachments/assets/dccc87ce-023c-4b98-9b97-11891e8120c9" width="600" controls autoplay loop muted></video>
+
 ![CMDR Demo — drift detection, gate checks, and real-model instruction-change detection](docs/screenshots/demo.gif)
 
 We gave GPT-4o-mini the same database migration task twice — once with safe instructions, once with aggressive instructions. CMDR caught the divergence:
