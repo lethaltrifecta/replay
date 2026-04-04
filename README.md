@@ -20,7 +20,7 @@ Teams change prompts, role files, and tool configurations far more often than th
 
 ## See It In Action
 
-<video src="" width="600" controls autoplay loop muted></video>
+<video src="https://github.com/user-attachments/assets/50cff202-3fff-4a44-97b4-fcda3f66a46e" width="600" controls autoplay loop muted></video>
 
 ![CMDR Demo — drift detection, gate checks, and real-model instruction-change detection](docs/screenshots/demo.gif)
 
